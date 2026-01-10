@@ -1,10 +1,10 @@
 // Qwixx Solo PWA (client-only). State is saved to localStorage.
-// Features added:
-// - Highlights legal numbers after each roll (Action 1 + Action 2)
-// - One-hand mode supported by bottom action bar (HTML/CSS)
-// - Per-row reset with confirmation (fat-finger protection)
+// Adds:
+// - Hint toggle: show/hide legal move highlights (still enforces legality either way)
+// - Toast on illegal tap explaining why (and small shake)
+// - Roll feedback (roll counter, timestamp, dice flash)
 
-const STORAGE_KEY = "qwixx_solo_state_v2";
+const STORAGE_KEY = "qwixx_solo_state_v4";
 
 const SCORE_TABLE = {
   0: 0, 1: 1, 2: 3, 3: 6, 4: 10, 5: 15, 6: 21,
@@ -19,7 +19,7 @@ const ROWS = [
 ];
 
 let state = loadState() ?? newGameState();
-let history = []; // undo stack snapshots
+let history = [];
 let lastRoll = null;
 
 const elDiceRow = document.getElementById("diceRow");
@@ -27,12 +27,26 @@ const elSheet   = document.getElementById("sheet");
 const elSumWhite = document.getElementById("sumWhite");
 const elSumColor = document.getElementById("sumColor");
 const elChkDidMark = document.getElementById("chkDidMark");
+const elChkHints = document.getElementById("chkHints");
 const elGameEnd = document.getElementById("gameEnd");
+const elToast = document.getElementById("toast");
+const elRollBadge = document.getElementById("rollBadge");
+const elRollTime = document.getElementById("rollTime");
 
 document.getElementById("btnRoll").addEventListener("click", rollDice);
 document.getElementById("btnPenalty").addEventListener("click", addPenalty);
 document.getElementById("btnUndo").addEventListener("click", undo);
 document.getElementById("btnNew").addEventListener("click", resetGame);
+
+// Init hint checkbox from state
+if (elChkHints) {
+  elChkHints.checked = !!state.hintsEnabled;
+  elChkHints.addEventListener("change", () => {
+    state.hintsEnabled = !!elChkHints.checked;
+    saveState();
+    renderAll();
+  });
+}
 
 renderAll();
 
@@ -40,13 +54,15 @@ renderAll();
 
 function newGameState() {
   const rows = {};
-  for (const r of ROWS) {
-    rows[r.key] = { marked: {}, locked: false };
-  }
+  for (const r of ROWS) rows[r.key] = { marked: {}, locked: false };
+
   return {
     rows,
     penalties: 0,
-    lockedCount: 0
+    lockedCount: 0,
+    rollCount: 0,
+    lastRolledAt: null,
+    hintsEnabled: true
   };
 }
 
@@ -54,7 +70,9 @@ function resetGame() {
   if (!confirm("Start a new game? This clears your sheet.")) return;
   history = [];
   lastRoll = null;
+  const keepHints = !!state.hintsEnabled;
   state = newGameState();
+  state.hintsEnabled = keepHints;
   saveState();
   renderAll();
 }
@@ -70,6 +88,10 @@ function undo() {
   const parsed = JSON.parse(snap);
   state = parsed.state;
   lastRoll = parsed.lastRoll;
+
+  // keep checkbox in sync
+  if (elChkHints) elChkHints.checked = !!state.hintsEnabled;
+
   saveState();
   renderAll();
 }
@@ -78,7 +100,12 @@ function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+
+    // Backfill hintsEnabled for older saves
+    if (typeof parsed.hintsEnabled !== "boolean") parsed.hintsEnabled = true;
+
+    return parsed;
   } catch { return null; }
 }
 
@@ -88,6 +115,17 @@ function saveState() {
 
 function randDie() {
   return 1 + Math.floor(Math.random() * 6);
+}
+
+/* ------------------ toast ------------------ */
+
+let toastTimer = null;
+function showToast(msg) {
+  if (!elToast) return;
+  elToast.textContent = msg;
+  elToast.classList.remove("hidden");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => elToast.classList.add("hidden"), 1400);
 }
 
 /* ------------------ game logic ------------------ */
@@ -112,9 +150,20 @@ function rollDice() {
     chosenColor: null
   };
 
+  state.rollCount = (state.rollCount || 0) + 1;
+  state.lastRolledAt = Date.now();
+
   elChkDidMark.checked = false;
 
+  saveState();
   renderAll();
+  flashDice();
+}
+
+function flashDice() {
+  elDiceRow.classList.remove("rolled");
+  void elDiceRow.offsetWidth; // reflow to restart animation
+  elDiceRow.classList.add("rolled");
 }
 
 function addPenalty() {
@@ -150,7 +199,6 @@ function canMark(rowKey, num) {
   const allowedFrom = getRowAllowedIndex(rowKey);
   if (idx < allowedFrom) return false;
 
-  // If trying to mark the end number, must already have at least 5 marks in that row.
   if (num === r.end) {
     const count = countMarks(rowKey);
     if (count < 5) return false;
@@ -159,33 +207,64 @@ function canMark(rowKey, num) {
   return true;
 }
 
+function explainIllegalTap(rowKey, num) {
+  const r = ROWS.find(x => x.key === rowKey);
+  const rowState = state.rows[rowKey];
+
+  if (rowState.locked) return `${r.label} is locked.`;
+  if (rowState.marked[num]) return `${num} is already marked.`;
+
+  const idx = r.nums.indexOf(num);
+  if (idx === -1) return `Not a valid number for ${r.label}.`;
+
+  const allowedFrom = getRowAllowedIndex(rowKey);
+  if (idx < allowedFrom) return `Must go left → right in ${r.label}.`;
+
+  if (num === r.end && countMarks(rowKey) < 5) {
+    return `Need 5 marks in ${r.label} before you can lock.`;
+  }
+
+  if (canMark(rowKey, num)) {
+    if (!lastRoll) return `Roll dice first.`;
+    const legal = getLegalTargets();
+    if (!legal.has(`${rowKey}:${num}`)) {
+      const whiteSum = lastRoll.white1 + lastRoll.white2;
+      return `Not legal for this roll. (Action 1 = ${whiteSum})`;
+    }
+  }
+
+  return `Not legal.`;
+}
+
 function markNumber(rowKey, num) {
-  if (!canMark(rowKey, num)) return;
+  const legalNow = getLegalTargets();
+  const isLegalRollTarget = legalNow.has(`${rowKey}:${num}`);
+
+  if (!canMark(rowKey, num) || (lastRoll && !isLegalRollTarget)) {
+    showToast(explainIllegalTap(rowKey, num));
+    return false;
+  }
 
   snapshot();
 
   state.rows[rowKey].marked[num] = true;
   elChkDidMark.checked = true;
 
-  // If end marked => lock row
   const r = ROWS.find(x => x.key === rowKey);
   if (num === r.end && !state.rows[rowKey].locked) {
     state.rows[rowKey].locked = true;
     state.lockedCount += 1;
-
-    // If the currently selected color got locked, clear it
-    if (lastRoll && lastRoll.chosenColor === rowKey) {
-      lastRoll.chosenColor = null;
-    }
+    if (lastRoll && lastRoll.chosenColor === rowKey) lastRoll.chosenColor = null;
   }
 
   saveState();
   renderAll();
+  return true;
 }
 
 function resetRow(rowKey) {
   const label = ROWS.find(r => r.key === rowKey)?.label ?? rowKey;
-  if (!confirm(`Reset ${label} row? This cannot be undone unless you press Undo right after.`)) return;
+  if (!confirm(`Reset ${label} row?`)) return;
 
   snapshot();
 
@@ -219,21 +298,18 @@ function computeTotals() {
   return { red, yellow, green, blue, pen, total };
 }
 
-/* ------------------ highlighting logic ------------------ */
+/* ------------------ legal highlight targets ------------------ */
 
 function getLegalTargets() {
-  // Returns a Set of "rowKey:num" strings
   const targets = new Set();
   if (!lastRoll) return targets;
 
   const whiteSum = lastRoll.white1 + lastRoll.white2;
 
-  // Action 1: any row, exact whiteSum, must be markable
   for (const r of ROWS) {
     if (canMark(r.key, whiteSum)) targets.add(`${r.key}:${whiteSum}`);
   }
 
-  // Action 2: only selected color row, using ONE white + color (two possible sums)
   const c = lastRoll.chosenColor;
   if (c && lastRoll[c] !== null) {
     const a = lastRoll.white1 + lastRoll[c];
@@ -246,6 +322,20 @@ function getLegalTargets() {
 }
 
 /* ------------------ render ------------------ */
+
+function renderRollMeta() {
+  const n = state.rollCount || 0;
+  elRollBadge.textContent = n ? `ROLL #${n}` : "—";
+  if (!state.lastRolledAt) {
+    elRollTime.textContent = "";
+    return;
+  }
+  const d = new Date(state.lastRolledAt);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  elRollTime.textContent = `${hh}:${mm}:${ss}`;
+}
 
 function renderDice() {
   elDiceRow.innerHTML = "";
@@ -272,14 +362,13 @@ function renderDice() {
     die.textContent = d.v === null ? "—" : String(d.v);
     if (d.v === null) die.style.opacity = "0.35";
 
-    // Clicking a color die selects it for Action 2 sums + highlights
     if (["red","yellow","green","blue"].includes(d.k) && d.v !== null) {
       die.style.cursor = "pointer";
       die.title = "Tap to select for Action 2";
       if (lastRoll.chosenColor === d.k) die.classList.add("selected");
 
       die.addEventListener("click", () => {
-        lastRoll.chosenColor = (lastRoll.chosenColor === d.k) ? null : d.k; // toggle
+        lastRoll.chosenColor = (lastRoll.chosenColor === d.k) ? null : d.k;
         renderAll();
       });
     }
@@ -318,7 +407,9 @@ function renderSums() {
 function renderSheet() {
   elSheet.innerHTML = "";
 
-  const legal = getLegalTargets();
+  // Only compute/use highlights if hints are enabled
+  const showHints = !!state.hintsEnabled;
+  const legal = showHints ? getLegalTargets() : new Set();
 
   for (const r of ROWS) {
     const rowState = state.rows[r.key];
@@ -350,23 +441,28 @@ function renderSheet() {
     cells.className = "cells";
 
     r.nums.forEach((num) => {
-      const c = document.createElement("div");
-      c.className = `cell ${r.color}` + (num === r.end ? " end" : "");
+      const cell = document.createElement("div");
+      cell.className = `cell ${r.color}` + (num === r.end ? " end" : "");
 
       const marked = !!rowState.marked[num];
-      if (marked) c.classList.add("marked");
+      if (marked) cell.classList.add("marked");
 
       const disabled = !canMark(r.key, num) && !marked;
-      if (disabled) c.classList.add("disabled");
+      if (disabled) cell.classList.add("disabled");
 
-      // highlight legal targets for current roll
-      if (legal.has(`${r.key}:${num}`) && !marked) {
-        c.classList.add("legal");
-      }
+      if (showHints && legal.has(`${r.key}:${num}`) && !marked) cell.classList.add("legal");
 
-      c.textContent = String(num);
-      c.addEventListener("click", () => markNumber(r.key, num));
-      cells.appendChild(c);
+      cell.textContent = String(num);
+
+      cell.addEventListener("click", () => {
+        const ok = markNumber(r.key, num);
+        if (!ok) {
+          cell.classList.add("illegal");
+          setTimeout(() => cell.classList.remove("illegal"), 200);
+        }
+      });
+
+      cells.appendChild(cell);
     });
 
     wrap.appendChild(title);
@@ -398,9 +494,13 @@ function renderEndCheck() {
 }
 
 function renderAll() {
+  renderRollMeta();
   renderDice();
   renderSums();
   renderSheet();
   renderScores();
   renderEndCheck();
+
+  // keep checkbox in sync
+  if (elChkHints) elChkHints.checked = !!state.hintsEnabled;
 }
