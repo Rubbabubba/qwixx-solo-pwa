@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Qwixx Solo</title>
+
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#111111" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Qwixx Solo</h1>
+      <div class="sub">PWA scoresheet + dice roller</div>
+    </div>
+    <div class="top-actions">
+      <button id="btnRoll" class="primary">Roll Dice</button>
+      <button id="btnUndo">Undo</button>
+      <button id="btnNew">New Game</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="panel">
+      <h2>Dice</h2>
+      <div id="diceRow" class="dice-row"></div>
+
+      <div class="callouts">
+        <div class="callout">
+          <div class="label">Action 1 (white + white)</div>
+          <div id="sumWhite" class="value">—</div>
+          <div class="hint">Tap a number in ANY row to mark it (optional in solo).</div>
+        </div>
+        <div class="callout">
+          <div class="label">Action 2 (white + color)</div>
+          <div id="sumColor" class="value">—</div>
+          <div class="hint">Tap a matching number in that color row (optional).</div>
+        </div>
+      </div>
+
+      <div class="row small">
+        <label class="chk">
+          <input type="checkbox" id="chkDidMark" />
+          I marked at least one number this roll (if not, take a penalty)
+        </label>
+        <button id="btnPenalty" class="danger">Add Penalty (−5)</button>
+      </div>
+
+      <div id="gameEnd" class="game-end hidden"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Scoresheet</h2>
+      <div id="sheet"></div>
+
+      <div class="scorebar">
+        <div>Red: <strong id="scoreRed">0</strong></div>
+        <div>Yellow: <strong id="scoreYellow">0</strong></div>
+        <div>Green: <strong id="scoreGreen">0</strong></div>
+        <div>Blue: <strong id="scoreBlue">0</strong></div>
+        <div>Penalties: <strong id="scorePen">0</strong></div>
+        <div class="total">TOTAL: <strong id="scoreTotal">0</strong></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>How to “Install”</h2>
+      <ul>
+        <li><strong>iPhone:</strong> open in Safari → Share → <em>Add to Home Screen</em></li>
+        <li><strong>Android:</strong> Chrome menu → <em>Install app</em> / <em>Add to Home screen</em></li>
+      </ul>
+      <p class="muted">Tip: this works offline after first load.</p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+    }
+  </script>
+</body>
+</html>
