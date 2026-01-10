@@ -1,10 +1,10 @@
-// Qwixx Solo PWA (client-only). State is saved to localStorage.
-// Adds:
-// - Hint toggle: show/hide legal move highlights (still enforces legality either way)
-// - Toast on illegal tap explaining why (and small shake)
-// - Roll feedback (roll counter, timestamp, dice flash)
+// Qwixx Solo PWA vs CPU (Option A: End Turn triggers CPU)
+// - Play vs CPU toggle
+// - End Turn button runs CPU move after your turn
+// - Two boards rendered (You interactive, CPU read-only)
+// - Hints toggle affects highlights on YOUR board only
 
-const STORAGE_KEY = "qwixx_solo_state_v4";
+const STORAGE_KEY = "qwixx_solo_cpu_state_v1";
 
 const SCORE_TABLE = {
   0: 0, 1: 1, 2: 3, 3: 6, 4: 10, 5: 15, 6: 21,
@@ -23,22 +23,25 @@ let history = [];
 let lastRoll = null;
 
 const elDiceRow = document.getElementById("diceRow");
-const elSheet   = document.getElementById("sheet");
+const elBoards  = document.getElementById("boards");
 const elSumWhite = document.getElementById("sumWhite");
 const elSumColor = document.getElementById("sumColor");
 const elChkDidMark = document.getElementById("chkDidMark");
 const elChkHints = document.getElementById("chkHints");
+const elChkVsCpu = document.getElementById("chkVsCpu");
 const elGameEnd = document.getElementById("gameEnd");
 const elToast = document.getElementById("toast");
 const elRollBadge = document.getElementById("rollBadge");
 const elRollTime = document.getElementById("rollTime");
+const elTurnHint = document.getElementById("turnHint");
+const elScoreLine = document.getElementById("scoreLine");
 
 document.getElementById("btnRoll").addEventListener("click", rollDice);
+document.getElementById("btnEndTurn").addEventListener("click", endTurn);
 document.getElementById("btnPenalty").addEventListener("click", addPenalty);
 document.getElementById("btnUndo").addEventListener("click", undo);
 document.getElementById("btnNew").addEventListener("click", resetGame);
 
-// Init hint checkbox from state
 if (elChkHints) {
   elChkHints.checked = !!state.hintsEnabled;
   elChkHints.addEventListener("change", () => {
@@ -48,38 +51,82 @@ if (elChkHints) {
   });
 }
 
+if (elChkVsCpu) {
+  elChkVsCpu.checked = !!state.vsCpu;
+  elChkVsCpu.addEventListener("change", () => {
+    snapshot();
+    state.vsCpu = !!elChkVsCpu.checked;
+    ensurePlayers();
+    saveState();
+    renderAll();
+  });
+}
+
 renderAll();
 
-/* ------------------ state helpers ------------------ */
+/* ------------------ state model ------------------ */
 
-function newGameState() {
+function emptyRowsState() {
   const rows = {};
   for (const r of ROWS) rows[r.key] = { marked: {}, locked: false };
+  return rows;
+}
 
+function newGameState() {
   return {
-    rows,
-    penalties: 0,
-    lockedCount: 0,
+    vsCpu: false,
+    hintsEnabled: true,
+
+    // Players[0] = You, Players[1] = CPU (if vsCpu)
+    players: [
+      { name: "You", isCpu: false, rows: emptyRowsState(), penalties: 0, lockedCount: 0 }
+    ],
+
     rollCount: 0,
     lastRolledAt: null,
-    hintsEnabled: true
+
+    // Turn gating
+    phase: "idle" // "idle" | "awaiting_player" | "awaiting_cpu" | "ended"
   };
 }
 
+function ensurePlayers() {
+  if (state.vsCpu) {
+    if (!state.players || state.players.length < 2) {
+      const you = state.players?.[0] ?? { name: "You", isCpu: false, rows: emptyRowsState(), penalties: 0, lockedCount: 0 };
+      state.players = [
+        you,
+        { name: "CPU", isCpu: true, rows: emptyRowsState(), penalties: 0, lockedCount: 0 }
+      ];
+    }
+  } else {
+    // solo mode: keep only You
+    state.players = [state.players?.[0] ?? { name: "You", isCpu: false, rows: emptyRowsState(), penalties: 0, lockedCount: 0 }];
+  }
+}
+
 function resetGame() {
-  if (!confirm("Start a new game? This clears your sheet.")) return;
+  if (!confirm("Start a new game? This clears your boards.")) return;
   history = [];
   lastRoll = null;
+
   const keepHints = !!state.hintsEnabled;
+  const keepVsCpu = !!state.vsCpu;
+
   state = newGameState();
   state.hintsEnabled = keepHints;
+  state.vsCpu = keepVsCpu;
+  ensurePlayers();
+
   saveState();
   renderAll();
 }
 
+/* ------------------ persistence & undo ------------------ */
+
 function snapshot() {
   history.push(JSON.stringify({ state, lastRoll }));
-  if (history.length > 60) history.shift();
+  if (history.length > 80) history.shift();
 }
 
 function undo() {
@@ -88,10 +135,6 @@ function undo() {
   const parsed = JSON.parse(snap);
   state = parsed.state;
   lastRoll = parsed.lastRoll;
-
-  // keep checkbox in sync
-  if (elChkHints) elChkHints.checked = !!state.hintsEnabled;
-
   saveState();
   renderAll();
 }
@@ -102,10 +145,16 @@ function loadState() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
 
-    // Backfill hintsEnabled for older saves
+    // Backfill flags
     if (typeof parsed.hintsEnabled !== "boolean") parsed.hintsEnabled = true;
+    if (typeof parsed.vsCpu !== "boolean") parsed.vsCpu = false;
+    if (!parsed.players || !Array.isArray(parsed.players) || parsed.players.length === 0) {
+      parsed.players = [{ name: "You", isCpu: false, rows: emptyRowsState(), penalties: 0, lockedCount: 0 }];
+    }
 
-    return parsed;
+    state = parsed;
+    ensurePlayers();
+    return state;
   } catch { return null; }
 }
 
@@ -128,58 +177,15 @@ function showToast(msg) {
   toastTimer = setTimeout(() => elToast.classList.add("hidden"), 1400);
 }
 
-/* ------------------ game logic ------------------ */
+/* ------------------ rules helpers (per-player) ------------------ */
 
-function rollDice() {
-  snapshot();
-
-  const locked = {
-    red: state.rows.red.locked,
-    yellow: state.rows.yellow.locked,
-    green: state.rows.green.locked,
-    blue: state.rows.blue.locked
-  };
-
-  lastRoll = {
-    white1: randDie(),
-    white2: randDie(),
-    red: locked.red ? null : randDie(),
-    yellow: locked.yellow ? null : randDie(),
-    green: locked.green ? null : randDie(),
-    blue: locked.blue ? null : randDie(),
-    chosenColor: null
-  };
-
-  state.rollCount = (state.rollCount || 0) + 1;
-  state.lastRolledAt = Date.now();
-
-  elChkDidMark.checked = false;
-
-  saveState();
-  renderAll();
-  flashDice();
+function countMarks(p, rowKey) {
+  return Object.keys(p.rows[rowKey].marked).length;
 }
 
-function flashDice() {
-  elDiceRow.classList.remove("rolled");
-  void elDiceRow.offsetWidth; // reflow to restart animation
-  elDiceRow.classList.add("rolled");
-}
-
-function addPenalty() {
-  snapshot();
-  state.penalties = Math.min(4, state.penalties + 1);
-  saveState();
-  renderAll();
-}
-
-function countMarks(rowKey) {
-  return Object.keys(state.rows[rowKey].marked).length;
-}
-
-function getRowAllowedIndex(rowKey) {
+function getRowAllowedIndex(p, rowKey) {
   const r = ROWS.find(x => x.key === rowKey);
-  const marked = state.rows[rowKey].marked;
+  const marked = p.rows[rowKey].marked;
   let lastIndex = -1;
   for (let i = 0; i < r.nums.length; i++) {
     if (marked[r.nums[i]]) lastIndex = i;
@@ -187,29 +193,56 @@ function getRowAllowedIndex(rowKey) {
   return lastIndex + 1;
 }
 
-function canMark(rowKey, num) {
+function canMark(p, rowKey, num) {
   const r = ROWS.find(x => x.key === rowKey);
-  const rowState = state.rows[rowKey];
+  const rowState = p.rows[rowKey];
   if (rowState.locked) return false;
   if (rowState.marked[num]) return false;
 
   const idx = r.nums.indexOf(num);
   if (idx === -1) return false;
 
-  const allowedFrom = getRowAllowedIndex(rowKey);
+  const allowedFrom = getRowAllowedIndex(p, rowKey);
   if (idx < allowedFrom) return false;
 
   if (num === r.end) {
-    const count = countMarks(rowKey);
-    if (count < 5) return false;
+    if (countMarks(p, rowKey) < 5) return false;
   }
 
   return true;
 }
 
-function explainIllegalTap(rowKey, num) {
+/* ------------------ legal targets (per-player) ------------------ */
+
+function getLegalTargetsForPlayer(p, chosenColorKey) {
+  const targets = new Set();
+  if (!lastRoll) return targets;
+
+  const whiteSum = lastRoll.white1 + lastRoll.white2;
+
+  // Action 1: any row, exact whiteSum
+  for (const r of ROWS) {
+    if (canMark(p, r.key, whiteSum)) targets.add(`${r.key}:${whiteSum}`);
+  }
+
+  // Action 2: chosen color row, using ONE white + color
+  const c = chosenColorKey;
+  if (c && lastRoll[c] !== null) {
+    const a = lastRoll.white1 + lastRoll[c];
+    const b = lastRoll.white2 + lastRoll[c];
+    if (canMark(p, c, a)) targets.add(`${c}:${a}`);
+    if (canMark(p, c, b)) targets.add(`${c}:${b}`);
+  }
+
+  return targets;
+}
+
+/* ------------------ marking (player vs cpu) ------------------ */
+
+function explainIllegalTapYou(rowKey, num) {
+  const you = state.players[0];
   const r = ROWS.find(x => x.key === rowKey);
-  const rowState = state.rows[rowKey];
+  const rowState = you.rows[rowKey];
 
   if (rowState.locked) return `${r.label} is locked.`;
   if (rowState.marked[num]) return `${num} is already marked.`;
@@ -217,16 +250,14 @@ function explainIllegalTap(rowKey, num) {
   const idx = r.nums.indexOf(num);
   if (idx === -1) return `Not a valid number for ${r.label}.`;
 
-  const allowedFrom = getRowAllowedIndex(rowKey);
+  const allowedFrom = getRowAllowedIndex(you, rowKey);
   if (idx < allowedFrom) return `Must go left → right in ${r.label}.`;
 
-  if (num === r.end && countMarks(rowKey) < 5) {
-    return `Need 5 marks in ${r.label} before you can lock.`;
-  }
+  if (num === r.end && countMarks(you, rowKey) < 5) return `Need 5 marks in ${r.label} before you can lock.`;
 
-  if (canMark(rowKey, num)) {
+  if (canMark(you, rowKey, num)) {
     if (!lastRoll) return `Roll dice first.`;
-    const legal = getLegalTargets();
+    const legal = getLegalTargetsForPlayer(you, state.youChosenColor);
     if (!legal.has(`${rowKey}:${num}`)) {
       const whiteSum = lastRoll.white1 + lastRoll.white2;
       return `Not legal for this roll. (Action 1 = ${whiteSum})`;
@@ -236,25 +267,34 @@ function explainIllegalTap(rowKey, num) {
   return `Not legal.`;
 }
 
-function markNumber(rowKey, num) {
-  const legalNow = getLegalTargets();
+function markNumberYou(rowKey, num) {
+  const you = state.players[0];
+
+  // Must be during your phase
+  if (state.phase !== "awaiting_player") {
+    showToast("Roll first, then play your turn.");
+    return false;
+  }
+
+  const legalNow = getLegalTargetsForPlayer(you, state.youChosenColor);
   const isLegalRollTarget = legalNow.has(`${rowKey}:${num}`);
 
-  if (!canMark(rowKey, num) || (lastRoll && !isLegalRollTarget)) {
-    showToast(explainIllegalTap(rowKey, num));
+  if (!canMark(you, rowKey, num) || (lastRoll && !isLegalRollTarget)) {
+    showToast(explainIllegalTapYou(rowKey, num));
     return false;
   }
 
   snapshot();
 
-  state.rows[rowKey].marked[num] = true;
+  you.rows[rowKey].marked[num] = true;
   elChkDidMark.checked = true;
 
+  // lock if end marked
   const r = ROWS.find(x => x.key === rowKey);
-  if (num === r.end && !state.rows[rowKey].locked) {
-    state.rows[rowKey].locked = true;
-    state.lockedCount += 1;
-    if (lastRoll && lastRoll.chosenColor === rowKey) lastRoll.chosenColor = null;
+  if (num === r.end && !you.rows[rowKey].locked) {
+    you.rows[rowKey].locked = true;
+    you.lockedCount += 1;
+    if (state.youChosenColor === rowKey) state.youChosenColor = null;
   }
 
   saveState();
@@ -262,63 +302,178 @@ function markNumber(rowKey, num) {
   return true;
 }
 
-function resetRow(rowKey) {
-  const label = ROWS.find(r => r.key === rowKey)?.label ?? rowKey;
-  if (!confirm(`Reset ${label} row?`)) return;
-
+function addPenalty() {
+  const you = state.players[0];
   snapshot();
-
-  const wasLocked = state.rows[rowKey].locked;
-  state.rows[rowKey].marked = {};
-  state.rows[rowKey].locked = false;
-
-  if (wasLocked) {
-    state.lockedCount = Math.max(0, state.lockedCount - 1);
-    if (lastRoll && lastRoll.chosenColor === rowKey) lastRoll.chosenColor = null;
-  }
-
+  you.penalties = Math.min(4, you.penalties + 1);
   saveState();
   renderAll();
 }
 
-/* ------------------ scoring ------------------ */
+/* ------------------ turn flow ------------------ */
 
-function computeScoreRow(rowKey) {
-  const n = countMarks(rowKey);
-  return SCORE_TABLE[Math.max(0, Math.min(12, n))];
+function rollDice() {
+  // Only roll when idle or after cpu finished, not mid-player/cpu step
+  if (state.phase === "awaiting_player" || state.phase === "awaiting_cpu") {
+    showToast("Finish the current turn first (End Turn).");
+    return;
+  }
+
+  snapshot();
+
+  // Locked dice per PLAYER, but dice are shared; in Qwixx, colored dice still roll even if your row is locked.
+  // We’ll keep existing behavior: if a row is locked for a player, that player just can’t mark there.
+  lastRoll = {
+    white1: randDie(),
+    white2: randDie(),
+    red: randDie(),
+    yellow: randDie(),
+    green: randDie(),
+    blue: randDie()
+  };
+
+  state.rollCount = (state.rollCount || 0) + 1;
+  state.lastRolledAt = Date.now();
+
+  // Your chosen color die for Action 2 (you select by tapping a die)
+  state.youChosenColor = null;
+
+  elChkDidMark.checked = false;
+
+  // Start player phase
+  state.phase = "awaiting_player";
+
+  saveState();
+  renderAll();
+  flashDice();
 }
 
-function computeTotals() {
-  const red = computeScoreRow("red");
-  const yellow = computeScoreRow("yellow");
-  const green = computeScoreRow("green");
-  const blue = computeScoreRow("blue");
-  const pen = state.penalties * -5;
+function endTurn() {
+  if (state.phase !== "awaiting_player") {
+    showToast("Roll first, then End Turn.");
+    return;
+  }
+
+  const you = state.players[0];
+
+  // If user didn't mark anything, they should take penalty (we prompt rather than auto)
+  if (!elChkDidMark.checked) {
+    const ok = confirm("You said you did NOT mark a number. Take a penalty?");
+    if (ok) {
+      snapshot();
+      you.penalties = Math.min(4, you.penalties + 1);
+    }
+  }
+
+  if (!state.vsCpu) {
+    // solo: just go back to idle
+    state.phase = "idle";
+    saveState();
+    renderAll();
+    return;
+  }
+
+  // CPU phase
+  snapshot();
+  state.phase = "awaiting_cpu";
+  saveState();
+  renderAll();
+
+  cpuPlayTurn();
+
+  // back to idle after cpu
+  state.phase = "idle";
+  saveState();
+  renderAll();
+}
+
+function flashDice() {
+  elDiceRow.classList.remove("rolled");
+  void elDiceRow.offsetWidth;
+  elDiceRow.classList.add("rolled");
+}
+
+/* ------------------ CPU strategy ------------------ */
+
+function cpuPlayTurn() {
+  const cpu = state.players[1];
+  if (!cpu) return;
+  if (!lastRoll) return;
+
+  let didMark = false;
+
+  // Action 1: try to mark white sum on best row (furthest progress)
+  const whiteSum = lastRoll.white1 + lastRoll.white2;
+  const a1Candidates = [];
+  for (const r of ROWS) {
+    if (canMark(cpu, r.key, whiteSum)) {
+      const idx = r.nums.indexOf(whiteSum);
+      a1Candidates.push({ rowKey: r.key, num: whiteSum, idx, lock: (whiteSum === r.end) });
+    }
+  }
+  if (a1Candidates.length) {
+    a1Candidates.sort((x,y) => (y.lock - x.lock) || (y.idx - x.idx));
+    const pick = a1Candidates[0];
+    applyCpuMark(cpu, pick.rowKey, pick.num);
+    didMark = true;
+  }
+
+  // Action 2: choose best color + sum (try lock first, else furthest progress)
+  const colorKeys = ["red","yellow","green","blue"];
+  const a2Candidates = [];
+
+  for (const c of colorKeys) {
+    // two sums (white1+color, white2+color)
+    const colorVal = lastRoll[c];
+    const s1 = lastRoll.white1 + colorVal;
+    const s2 = lastRoll.white2 + colorVal;
+
+    for (const s of [s1, s2]) {
+      if (canMark(cpu, c, s)) {
+        const r = ROWS.find(x => x.key === c);
+        const idx = r.nums.indexOf(s);
+        a2Candidates.push({ rowKey: c, num: s, idx, lock: (s === r.end) });
+      }
+    }
+  }
+
+  if (a2Candidates.length) {
+    a2Candidates.sort((x,y) => (y.lock - x.lock) || (y.idx - x.idx));
+    const pick = a2Candidates[0];
+    applyCpuMark(cpu, pick.rowKey, pick.num);
+    didMark = true;
+  }
+
+  // If CPU can't mark anything, take a penalty
+  if (!didMark) {
+    cpu.penalties = Math.min(4, cpu.penalties + 1);
+  }
+}
+
+function applyCpuMark(cpu, rowKey, num) {
+  cpu.rows[rowKey].marked[num] = true;
+
+  const r = ROWS.find(x => x.key === rowKey);
+  if (num === r.end && !cpu.rows[rowKey].locked) {
+    cpu.rows[rowKey].locked = true;
+    cpu.lockedCount += 1;
+  }
+}
+
+/* ------------------ scoring & end ------------------ */
+
+function scoreForPlayer(p) {
+  const red = SCORE_TABLE[countMarks(p, "red")] ?? 0;
+  const yellow = SCORE_TABLE[countMarks(p, "yellow")] ?? 0;
+  const green = SCORE_TABLE[countMarks(p, "green")] ?? 0;
+  const blue = SCORE_TABLE[countMarks(p, "blue")] ?? 0;
+  const pen = p.penalties * -5;
   const total = red + yellow + green + blue + pen;
   return { red, yellow, green, blue, pen, total };
 }
 
-/* ------------------ legal highlight targets ------------------ */
-
-function getLegalTargets() {
-  const targets = new Set();
-  if (!lastRoll) return targets;
-
-  const whiteSum = lastRoll.white1 + lastRoll.white2;
-
-  for (const r of ROWS) {
-    if (canMark(r.key, whiteSum)) targets.add(`${r.key}:${whiteSum}`);
-  }
-
-  const c = lastRoll.chosenColor;
-  if (c && lastRoll[c] !== null) {
-    const a = lastRoll.white1 + lastRoll[c];
-    const b = lastRoll.white2 + lastRoll[c];
-    if (canMark(c, a)) targets.add(`${c}:${a}`);
-    if (canMark(c, b)) targets.add(`${c}:${b}`);
-  }
-
-  return targets;
+function checkEndedForPlayer(p) {
+  return (p.penalties >= 4) || (p.lockedCount >= 2);
 }
 
 /* ------------------ render ------------------ */
@@ -359,16 +514,21 @@ function renderDice() {
 
     const die = document.createElement("div");
     die.className = `die ${d.cls}`;
-    die.textContent = d.v === null ? "—" : String(d.v);
-    if (d.v === null) die.style.opacity = "0.35";
+    die.textContent = String(d.v);
 
-    if (["red","yellow","green","blue"].includes(d.k) && d.v !== null) {
+    // Your Action 2 die selection
+    if (["red","yellow","green","blue"].includes(d.k)) {
       die.style.cursor = "pointer";
-      die.title = "Tap to select for Action 2";
-      if (lastRoll.chosenColor === d.k) die.classList.add("selected");
+      die.title = "Tap to select for your Action 2";
+      if (state.youChosenColor === d.k) die.classList.add("selected");
 
       die.addEventListener("click", () => {
-        lastRoll.chosenColor = (lastRoll.chosenColor === d.k) ? null : d.k;
+        if (state.phase !== "awaiting_player") {
+          showToast("Select a color after you roll (during your turn).");
+          return;
+        }
+        state.youChosenColor = (state.youChosenColor === d.k) ? null : d.k;
+        saveState();
         renderAll();
       });
     }
@@ -393,8 +553,8 @@ function renderSums() {
   const whiteSum = lastRoll.white1 + lastRoll.white2;
   elSumWhite.textContent = String(whiteSum);
 
-  const c = lastRoll.chosenColor;
-  if (!c || lastRoll[c] === null) {
+  const c = state.youChosenColor;
+  if (!c) {
     elSumColor.textContent = "Tap a color die";
     return;
   }
@@ -404,38 +564,111 @@ function renderSums() {
   elSumColor.textContent = `${c.toUpperCase()}: ${a} (W1) / ${b} (W2)`;
 }
 
-function renderSheet() {
-  elSheet.innerHTML = "";
+function renderTurnHint() {
+  if (state.phase === "awaiting_player") {
+    elTurnHint.textContent = state.vsCpu
+      ? "Your turn: mark any legal moves, then press End Turn for CPU."
+      : "Your turn: mark any legal moves, then press End Turn to continue.";
+  } else if (state.phase === "idle") {
+    elTurnHint.textContent = "Tap Roll to start the next turn.";
+  } else if (state.phase === "awaiting_cpu") {
+    elTurnHint.textContent = "CPU is playing…";
+  } else {
+    elTurnHint.textContent = "";
+  }
+}
 
-  // Only compute/use highlights if hints are enabled
-  const showHints = !!state.hintsEnabled;
-  const legal = showHints ? getLegalTargets() : new Set();
+function renderScores() {
+  const you = state.players[0];
+  const ys = scoreForPlayer(you);
+
+  if (!state.vsCpu) {
+    elScoreLine.innerHTML = `
+      <span class="scorepill">You: <strong>${ys.total}</strong> (Pen ${ys.pen})</span>
+    `;
+    return;
+  }
+
+  const cpu = state.players[1];
+  const cs = scoreForPlayer(cpu);
+
+  elScoreLine.innerHTML = `
+    <span class="scorepill">You: <strong>${ys.total}</strong> (Pen ${ys.pen})</span>
+    <span class="scorepill">CPU: <strong>${cs.total}</strong> (Pen ${cs.pen})</span>
+  `;
+}
+
+function renderBoards() {
+  elBoards.innerHTML = "";
+  ensurePlayers();
+
+  const grid = document.createElement("div");
+  grid.className = "boards-grid";
+
+  grid.appendChild(renderBoard(0));
+  if (state.vsCpu) grid.appendChild(renderBoard(1));
+
+  elBoards.appendChild(grid);
+}
+
+function renderBoard(playerIndex) {
+  const p = state.players[playerIndex];
+  const isYou = (playerIndex === 0);
+
+  const boardWrap = document.createElement("div");
+
+  const header = document.createElement("div");
+  header.className = "board-header";
+
+  const title = document.createElement("div");
+  title.className = "board-title";
+  title.innerHTML = `<strong>${p.name}</strong><small>${isYou ? "Tap tiles to mark" : "Auto-play"}</small>`;
+
+  const badge = document.createElement("span");
+  badge.className = "badge2" + (p.isCpu ? " cpu" : "");
+  badge.textContent = p.isCpu ? "CPU" : "Player";
+
+  header.appendChild(title);
+  header.appendChild(badge);
+
+  boardWrap.appendChild(header);
+
+  // highlights only for YOU and only if hints enabled
+  const showHints = isYou && !!state.hintsEnabled && state.phase === "awaiting_player";
+  const legal = showHints ? getLegalTargetsForPlayer(p, state.youChosenColor) : new Set();
 
   for (const r of ROWS) {
-    const rowState = state.rows[r.key];
+    const rowState = p.rows[r.key];
 
     const wrap = document.createElement("div");
     wrap.className = "sheet-row";
 
-    const title = document.createElement("div");
-    title.className = "title";
+    const t = document.createElement("div");
+    t.className = "title";
 
     const left = document.createElement("div");
     left.className = "titleLeft";
     left.innerHTML = `<strong>${r.label}</strong>`;
 
-    const badge = document.createElement("span");
-    badge.className = "badge" + (rowState.locked ? " locked" : "");
-    badge.textContent = rowState.locked ? "LOCKED" : `Marks: ${countMarks(r.key)}`;
-    left.appendChild(badge);
+    const marksBadge = document.createElement("span");
+    marksBadge.className = "badge" + (rowState.locked ? " locked" : "");
+    marksBadge.textContent = rowState.locked ? "LOCKED" : `Marks: ${countMarks(p, r.key)}`;
+    left.appendChild(marksBadge);
 
-    const resetBtn = document.createElement("button");
-    resetBtn.className = "btnReset";
-    resetBtn.textContent = "Reset";
-    resetBtn.addEventListener("click", () => resetRow(r.key));
+    t.appendChild(left);
 
-    title.appendChild(left);
-    title.appendChild(resetBtn);
+    // Row reset only for YOU
+    if (isYou) {
+      const resetBtn = document.createElement("button");
+      resetBtn.className = "btnReset";
+      resetBtn.textContent = "Reset";
+      resetBtn.addEventListener("click", () => resetRowYou(r.key));
+      t.appendChild(resetBtn);
+    } else {
+      const spacer = document.createElement("div");
+      spacer.style.width = "64px";
+      t.appendChild(spacer);
+    }
 
     const cells = document.createElement("div");
     cells.className = "cells";
@@ -447,60 +680,101 @@ function renderSheet() {
       const marked = !!rowState.marked[num];
       if (marked) cell.classList.add("marked");
 
-      const disabled = !canMark(r.key, num) && !marked;
+      const disabled = !canMark(p, r.key, num) && !marked;
       if (disabled) cell.classList.add("disabled");
 
       if (showHints && legal.has(`${r.key}:${num}`) && !marked) cell.classList.add("legal");
 
       cell.textContent = String(num);
 
-      cell.addEventListener("click", () => {
-        const ok = markNumber(r.key, num);
-        if (!ok) {
-          cell.classList.add("illegal");
-          setTimeout(() => cell.classList.remove("illegal"), 200);
-        }
-      });
+      if (isYou) {
+        cell.addEventListener("click", () => {
+          const ok = markNumberYou(r.key, num);
+          if (!ok) {
+            cell.classList.add("illegal");
+            setTimeout(() => cell.classList.remove("illegal"), 200);
+          }
+        });
+      }
 
       cells.appendChild(cell);
     });
 
-    wrap.appendChild(title);
+    wrap.appendChild(t);
     wrap.appendChild(cells);
-    elSheet.appendChild(wrap);
+    boardWrap.appendChild(wrap);
   }
+
+  return boardWrap;
 }
 
-function renderScores() {
-  const t = computeTotals();
-  document.getElementById("scoreRed").textContent = t.red;
-  document.getElementById("scoreYellow").textContent = t.yellow;
-  document.getElementById("scoreGreen").textContent = t.green;
-  document.getElementById("scoreBlue").textContent = t.blue;
-  document.getElementById("scorePen").textContent = t.pen;
-  document.getElementById("scoreTotal").textContent = t.total;
+function resetRowYou(rowKey) {
+  const you = state.players[0];
+  const label = ROWS.find(r => r.key === rowKey)?.label ?? rowKey;
+  if (!confirm(`Reset ${label} row?`)) return;
+
+  snapshot();
+
+  const wasLocked = you.rows[rowKey].locked;
+  you.rows[rowKey].marked = {};
+  you.rows[rowKey].locked = false;
+  if (wasLocked) you.lockedCount = Math.max(0, you.lockedCount - 1);
+
+  if (state.youChosenColor === rowKey) state.youChosenColor = null;
+
+  saveState();
+  renderAll();
 }
 
 function renderEndCheck() {
-  const ended = (state.penalties >= 4) || (state.lockedCount >= 2);
+  const you = state.players[0];
+  const endedYou = checkEndedForPlayer(you);
+
+  let endedCpu = false;
+  let cpu = null;
+  if (state.vsCpu) {
+    cpu = state.players[1];
+    endedCpu = checkEndedForPlayer(cpu);
+  }
+
+  const ended = endedYou || endedCpu;
   if (!ended) {
     elGameEnd.classList.add("hidden");
     elGameEnd.textContent = "";
     return;
   }
+
+  state.phase = "ended";
+
+  const ys = scoreForPlayer(you);
+  let msg = `Game Over. You: ${ys.total}.`;
+
+  if (state.vsCpu && cpu) {
+    const cs = scoreForPlayer(cpu);
+    msg += ` CPU: ${cs.total}. `;
+    if (ys.total > cs.total) msg += "You win!";
+    else if (ys.total < cs.total) msg += "CPU wins!";
+    else msg += "Tie game!";
+  }
+
   elGameEnd.classList.remove("hidden");
-  elGameEnd.textContent =
-    `Game Over: ${state.penalties >= 4 ? "4 penalties" : "2 rows locked"}. Final total: ${computeTotals().total}`;
+  elGameEnd.textContent = msg;
+
+  saveState();
 }
 
 function renderAll() {
+  ensurePlayers();
+
+  // sync checkboxes
+  if (elChkHints) elChkHints.checked = !!state.hintsEnabled;
+  if (elChkVsCpu) elChkVsCpu.checked = !!state.vsCpu;
+
   renderRollMeta();
   renderDice();
   renderSums();
-  renderSheet();
+  renderTurnHint();
   renderScores();
+  renderBoards();
   renderEndCheck();
-
-  // keep checkbox in sync
-  if (elChkHints) elChkHints.checked = !!state.hintsEnabled;
 }
