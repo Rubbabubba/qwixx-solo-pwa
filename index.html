@@ -14,30 +14,27 @@
   <header class="top">
     <div>
       <h1>Qwixx Solo</h1>
-      <div class="sub">PWA scoresheet + dice roller</div>
-    </div>
-    <div class="top-actions">
-      <button id="btnRoll" class="primary">Roll Dice</button>
-      <button id="btnUndo">Undo</button>
-      <button id="btnNew">New Game</button>
+      <div class="sub">Scoresheet + dice roller (offline PWA)</div>
     </div>
   </header>
 
   <main class="wrap">
     <section class="panel">
       <h2>Dice</h2>
+
       <div id="diceRow" class="dice-row"></div>
 
       <div class="callouts">
         <div class="callout">
           <div class="label">Action 1 (white + white)</div>
           <div id="sumWhite" class="value">—</div>
-          <div class="hint">Tap a number in ANY row to mark it (optional in solo).</div>
+          <div class="hint">Legal cells for Action 1 will glow.</div>
         </div>
+
         <div class="callout">
-          <div class="label">Action 2 (white + color)</div>
+          <div class="label">Action 2 (white + selected color)</div>
           <div id="sumColor" class="value">—</div>
-          <div class="hint">Tap a matching number in that color row (optional).</div>
+          <div class="hint">Tap a color die to select it. Legal cells will glow.</div>
         </div>
       </div>
 
@@ -46,7 +43,6 @@
           <input type="checkbox" id="chkDidMark" />
           I marked at least one number this roll (if not, take a penalty)
         </label>
-        <button id="btnPenalty" class="danger">Add Penalty (−5)</button>
       </div>
 
       <div id="gameEnd" class="game-end hidden"></div>
@@ -67,14 +63,22 @@
     </section>
 
     <section class="panel">
-      <h2>How to “Install”</h2>
+      <h2>Install</h2>
       <ul>
         <li><strong>iPhone:</strong> open in Safari → Share → <em>Add to Home Screen</em></li>
-        <li><strong>Android:</strong> Chrome menu → <em>Install app</em> / <em>Add to Home screen</em></li>
+        <li><strong>Android:</strong> Chrome menu → <em>Install app</em></li>
       </ul>
-      <p class="muted">Tip: this works offline after first load.</p>
+      <p class="muted">Tip: after the first load, it works offline.</p>
     </section>
   </main>
+
+  <!-- One-hand bottom action bar -->
+  <nav class="bottom-bar" aria-label="Actions">
+    <button id="btnRoll" class="primary big">Roll</button>
+    <button id="btnUndo" class="big">Undo</button>
+    <button id="btnPenalty" class="danger big">Penalty</button>
+    <button id="btnNew" class="big">New</button>
+  </nav>
 
   <script src="app.js"></script>
   <script>
