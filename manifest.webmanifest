@@ -1,0 +1,15 @@
+{
+  "name": "Qwixx Solo",
+  "short_name": "Qwixx",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0f0f12",
+  "theme_color": "#111111",
+  "icons": [
+    {
+      "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAJ0lEQVR4nO3BMQEAAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAA4G4B1wAAAXkq1b0AAAAASUVORK5CYII=",
+      "sizes": "64x64",
+      "type": "image/png"
+    }
+  ]
+}
