@@ -42,17 +42,22 @@
         <div class="callout">
           <div class="label">Action 1 (white + white)</div>
           <div id="sumWhite" class="value">—</div>
-          <div class="hint">Legal cells for Action 1 glow.</div>
+          <div class="hint">Hints show legal cells for Action 1.</div>
         </div>
 
         <div class="callout">
           <div class="label">Action 2 (white + selected color)</div>
           <div id="sumColor" class="value">—</div>
-          <div class="hint">Tap a color die to select it. Legal cells glow in that row.</div>
+          <div class="hint">Tap a color die to select it. Hints show legal cells.</div>
         </div>
       </div>
 
       <div class="row small">
+        <label class="chk">
+          <input type="checkbox" id="chkHints" />
+          Hints (highlight legal moves)
+        </label>
+
         <label class="chk">
           <input type="checkbox" id="chkDidMark" />
           I marked at least one number this roll (if not, take a penalty)
