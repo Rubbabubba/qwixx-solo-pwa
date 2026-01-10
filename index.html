@@ -17,9 +17,18 @@
       <div class="sub">Scoresheet + dice roller (offline PWA)</div>
     </div>
 
-    <div class="roll-meta">
-      <span id="rollBadge" class="roll-badge">—</span>
-      <span id="rollTime" class="roll-time"> </span>
+    <div class="top-right">
+      <div class="roll-meta">
+        <span id="rollBadge" class="roll-badge">—</span>
+        <span id="rollTime" class="roll-time"></span>
+      </div>
+
+      <div class="top-actions">
+        <button id="btnRoll" class="primary">Roll</button>
+        <button id="btnUndo">Undo</button>
+        <button id="btnPenalty" class="danger">Penalty</button>
+        <button id="btnNew">New</button>
+      </div>
     </div>
   </header>
 
@@ -66,27 +75,10 @@
         <div class="total">TOTAL: <strong id="scoreTotal">0</strong></div>
       </div>
     </section>
-
-    <section class="panel">
-      <h2>Install</h2>
-      <ul>
-        <li><strong>iPhone:</strong> open in Safari → Share → <em>Add to Home Screen</em></li>
-        <li><strong>Android:</strong> Chrome menu → <em>Install app</em></li>
-      </ul>
-      <p class="muted">Tip: after the first load, it works offline.</p>
-    </section>
   </main>
 
   <!-- Toast -->
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-
-  <!-- One-hand bottom action bar -->
-  <nav class="bottom-bar" aria-label="Actions">
-    <button id="btnRoll" class="primary big">Roll</button>
-    <button id="btnUndo" class="big">Undo</button>
-    <button id="btnPenalty" class="danger big">Penalty</button>
-    <button id="btnNew" class="big">New</button>
-  </nav>
 
   <script src="app.js"></script>
   <script>
