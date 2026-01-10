@@ -1,7 +1,10 @@
 // Qwixx Solo PWA (client-only). State is saved to localStorage.
-// Enforces: left->right marking, row locking rule, scoring table, penalties.
+// Features added:
+// - Highlights legal numbers after each roll (Action 1 + Action 2)
+// - One-hand mode supported by bottom action bar (HTML/CSS)
+// - Per-row reset with confirmation (fat-finger protection)
 
-const STORAGE_KEY = "qwixx_solo_state_v1";
+const STORAGE_KEY = "qwixx_solo_state_v2";
 
 const SCORE_TABLE = {
   0: 0, 1: 1, 2: 3, 3: 6, 4: 10, 5: 15, 6: 21,
@@ -9,10 +12,10 @@ const SCORE_TABLE = {
 };
 
 const ROWS = [
-  { key: "red",    label: "Red",    color: "red",    nums: [2,3,4,5,6,7,8,9,10,11,12], end: 12, asc: true  },
-  { key: "yellow", label: "Yellow", color: "yellow", nums: [2,3,4,5,6,7,8,9,10,11,12], end: 12, asc: true  },
-  { key: "green",  label: "Green",  color: "green",  nums: [12,11,10,9,8,7,6,5,4,3,2], end: 2,  asc: false },
-  { key: "blue",   label: "Blue",   color: "blue",   nums: [12,11,10,9,8,7,6,5,4,3,2], end: 2,  asc: false }
+  { key: "red",    label: "Red",    color: "red",    nums: [2,3,4,5,6,7,8,9,10,11,12], end: 12 },
+  { key: "yellow", label: "Yellow", color: "yellow", nums: [2,3,4,5,6,7,8,9,10,11,12], end: 12 },
+  { key: "green",  label: "Green",  color: "green",  nums: [12,11,10,9,8,7,6,5,4,3,2], end: 2  },
+  { key: "blue",   label: "Blue",   color: "blue",   nums: [12,11,10,9,8,7,6,5,4,3,2], end: 2  }
 ];
 
 let state = loadState() ?? newGameState();
@@ -33,13 +36,12 @@ document.getElementById("btnNew").addEventListener("click", resetGame);
 
 renderAll();
 
+/* ------------------ state helpers ------------------ */
+
 function newGameState() {
   const rows = {};
   for (const r of ROWS) {
-    rows[r.key] = {
-      marked: {},     // num -> true
-      locked: false
-    };
+    rows[r.key] = { marked: {}, locked: false };
   }
   return {
     rows,
@@ -59,7 +61,7 @@ function resetGame() {
 
 function snapshot() {
   history.push(JSON.stringify({ state, lastRoll }));
-  if (history.length > 50) history.shift();
+  if (history.length > 60) history.shift();
 }
 
 function undo() {
@@ -88,10 +90,11 @@ function randDie() {
   return 1 + Math.floor(Math.random() * 6);
 }
 
+/* ------------------ game logic ------------------ */
+
 function rollDice() {
   snapshot();
 
-  // If a color row is locked, its die is considered removed. We'll still show it but gray it out.
   const locked = {
     red: state.rows.red.locked,
     yellow: state.rows.yellow.locked,
@@ -111,74 +114,7 @@ function rollDice() {
 
   elChkDidMark.checked = false;
 
-  renderDice();
-  renderSums();
-  renderEndCheck();
-}
-
-function renderDice() {
-  elDiceRow.innerHTML = "";
-  if (!lastRoll) {
-    elDiceRow.innerHTML = `<div class="muted">Tap “Roll Dice” to start.</div>`;
-    return;
-  }
-
-  const dice = [
-    { k: "white1", v: lastRoll.white1, cls: "white", label: "W1" },
-    { k: "white2", v: lastRoll.white2, cls: "white", label: "W2" },
-    { k: "red", v: lastRoll.red, cls: "red", label: "R" },
-    { k: "yellow", v: lastRoll.yellow, cls: "yellow", label: "Y" },
-    { k: "green", v: lastRoll.green, cls: "green", label: "G" },
-    { k: "blue", v: lastRoll.blue, cls: "blue", label: "B" }
-  ];
-
-  for (const d of dice) {
-    const wrap = document.createElement("div");
-    const die = document.createElement("div");
-    die.className = `die ${d.cls}`;
-    die.textContent = d.v === null ? "—" : String(d.v);
-    if (d.v === null) die.style.opacity = "0.35";
-
-    // Clicking a color die selects it for Action 2 sum display
-    if (["red","yellow","green","blue"].includes(d.k) && d.v !== null) {
-      die.style.cursor = "pointer";
-      die.title = "Tap to select for Action 2";
-      die.addEventListener("click", () => {
-        lastRoll.chosenColor = d.k;
-        renderSums();
-      });
-    }
-
-    const lab = document.createElement("div");
-    lab.className = "dieLabel";
-    lab.textContent = d.label;
-
-    wrap.appendChild(die);
-    wrap.appendChild(lab);
-    elDiceRow.appendChild(wrap);
-  }
-}
-
-function renderSums() {
-  if (!lastRoll) {
-    elSumWhite.textContent = "—";
-    elSumColor.textContent = "—";
-    return;
-  }
-  const whiteSum = lastRoll.white1 + lastRoll.white2;
-  elSumWhite.textContent = String(whiteSum);
-
-  const c = lastRoll.chosenColor;
-  if (!c || lastRoll[c] === null) {
-    elSumColor.textContent = "Tap a color die";
-    return;
-  }
-
-  // For Action 2, player chooses ONE white die + the selected color die.
-  // We'll show the two possibilities.
-  const a = lastRoll.white1 + lastRoll[c];
-  const b = lastRoll.white2 + lastRoll[c];
-  elSumColor.textContent = `${c.toUpperCase()}: ${a} (W1) / ${b} (W2)`;
+  renderAll();
 }
 
 function addPenalty() {
@@ -188,16 +124,18 @@ function addPenalty() {
   renderAll();
 }
 
+function countMarks(rowKey) {
+  return Object.keys(state.rows[rowKey].marked).length;
+}
+
 function getRowAllowedIndex(rowKey) {
-  // Allowed to mark only numbers to the RIGHT of last marked position.
   const r = ROWS.find(x => x.key === rowKey);
   const marked = state.rows[rowKey].marked;
-
   let lastIndex = -1;
   for (let i = 0; i < r.nums.length; i++) {
     if (marked[r.nums[i]]) lastIndex = i;
   }
-  return lastIndex + 1; // next index or beyond
+  return lastIndex + 1;
 }
 
 function canMark(rowKey, num) {
@@ -212,7 +150,6 @@ function canMark(rowKey, num) {
   const allowedFrom = getRowAllowedIndex(rowKey);
   if (idx < allowedFrom) return false;
 
-  // Locking requirement:
   // If trying to mark the end number, must already have at least 5 marks in that row.
   if (num === r.end) {
     const count = countMarks(rowKey);
@@ -235,15 +172,37 @@ function markNumber(rowKey, num) {
   if (num === r.end && !state.rows[rowKey].locked) {
     state.rows[rowKey].locked = true;
     state.lockedCount += 1;
+
+    // If the currently selected color got locked, clear it
+    if (lastRoll && lastRoll.chosenColor === rowKey) {
+      lastRoll.chosenColor = null;
+    }
   }
 
   saveState();
   renderAll();
 }
 
-function countMarks(rowKey) {
-  return Object.keys(state.rows[rowKey].marked).length;
+function resetRow(rowKey) {
+  const label = ROWS.find(r => r.key === rowKey)?.label ?? rowKey;
+  if (!confirm(`Reset ${label} row? This cannot be undone unless you press Undo right after.`)) return;
+
+  snapshot();
+
+  const wasLocked = state.rows[rowKey].locked;
+  state.rows[rowKey].marked = {};
+  state.rows[rowKey].locked = false;
+
+  if (wasLocked) {
+    state.lockedCount = Math.max(0, state.lockedCount - 1);
+    if (lastRoll && lastRoll.chosenColor === rowKey) lastRoll.chosenColor = null;
+  }
+
+  saveState();
+  renderAll();
 }
+
+/* ------------------ scoring ------------------ */
 
 function computeScoreRow(rowKey) {
   const n = countMarks(rowKey);
@@ -260,8 +219,107 @@ function computeTotals() {
   return { red, yellow, green, blue, pen, total };
 }
 
+/* ------------------ highlighting logic ------------------ */
+
+function getLegalTargets() {
+  // Returns a Set of "rowKey:num" strings
+  const targets = new Set();
+  if (!lastRoll) return targets;
+
+  const whiteSum = lastRoll.white1 + lastRoll.white2;
+
+  // Action 1: any row, exact whiteSum, must be markable
+  for (const r of ROWS) {
+    if (canMark(r.key, whiteSum)) targets.add(`${r.key}:${whiteSum}`);
+  }
+
+  // Action 2: only selected color row, using ONE white + color (two possible sums)
+  const c = lastRoll.chosenColor;
+  if (c && lastRoll[c] !== null) {
+    const a = lastRoll.white1 + lastRoll[c];
+    const b = lastRoll.white2 + lastRoll[c];
+    if (canMark(c, a)) targets.add(`${c}:${a}`);
+    if (canMark(c, b)) targets.add(`${c}:${b}`);
+  }
+
+  return targets;
+}
+
+/* ------------------ render ------------------ */
+
+function renderDice() {
+  elDiceRow.innerHTML = "";
+  if (!lastRoll) {
+    elDiceRow.innerHTML = `<div class="muted">Tap “Roll” to start.</div>`;
+    return;
+  }
+
+  const dice = [
+    { k: "white1", v: lastRoll.white1, cls: "white", label: "W1" },
+    { k: "white2", v: lastRoll.white2, cls: "white", label: "W2" },
+    { k: "red", v: lastRoll.red, cls: "red", label: "R" },
+    { k: "yellow", v: lastRoll.yellow, cls: "yellow", label: "Y" },
+    { k: "green", v: lastRoll.green, cls: "green", label: "G" },
+    { k: "blue", v: lastRoll.blue, cls: "blue", label: "B" }
+  ];
+
+  for (const d of dice) {
+    const wrap = document.createElement("div");
+    wrap.className = "dieWrap";
+
+    const die = document.createElement("div");
+    die.className = `die ${d.cls}`;
+    die.textContent = d.v === null ? "—" : String(d.v);
+    if (d.v === null) die.style.opacity = "0.35";
+
+    // Clicking a color die selects it for Action 2 sums + highlights
+    if (["red","yellow","green","blue"].includes(d.k) && d.v !== null) {
+      die.style.cursor = "pointer";
+      die.title = "Tap to select for Action 2";
+      if (lastRoll.chosenColor === d.k) die.classList.add("selected");
+
+      die.addEventListener("click", () => {
+        lastRoll.chosenColor = (lastRoll.chosenColor === d.k) ? null : d.k; // toggle
+        renderAll();
+      });
+    }
+
+    const lab = document.createElement("div");
+    lab.className = "dieLabel";
+    lab.textContent = d.label;
+
+    wrap.appendChild(die);
+    wrap.appendChild(lab);
+    elDiceRow.appendChild(wrap);
+  }
+}
+
+function renderSums() {
+  if (!lastRoll) {
+    elSumWhite.textContent = "—";
+    elSumColor.textContent = "—";
+    return;
+  }
+
+  const whiteSum = lastRoll.white1 + lastRoll.white2;
+  elSumWhite.textContent = String(whiteSum);
+
+  const c = lastRoll.chosenColor;
+  if (!c || lastRoll[c] === null) {
+    elSumColor.textContent = "Tap a color die";
+    return;
+  }
+
+  const a = lastRoll.white1 + lastRoll[c];
+  const b = lastRoll.white2 + lastRoll[c];
+  elSumColor.textContent = `${c.toUpperCase()}: ${a} (W1) / ${b} (W2)`;
+}
+
 function renderSheet() {
   elSheet.innerHTML = "";
+
+  const legal = getLegalTargets();
+
   for (const r of ROWS) {
     const rowState = state.rows[r.key];
 
@@ -272,33 +330,39 @@ function renderSheet() {
     title.className = "title";
 
     const left = document.createElement("div");
+    left.className = "titleLeft";
     left.innerHTML = `<strong>${r.label}</strong>`;
 
-    const right = document.createElement("div");
-    const b = document.createElement("span");
-    b.className = "badge" + (rowState.locked ? " locked" : "");
-    b.textContent = rowState.locked ? "LOCKED" : `Marks: ${countMarks(r.key)}`;
-    right.appendChild(b);
+    const badge = document.createElement("span");
+    badge.className = "badge" + (rowState.locked ? " locked" : "");
+    badge.textContent = rowState.locked ? "LOCKED" : `Marks: ${countMarks(r.key)}`;
+    left.appendChild(badge);
+
+    const resetBtn = document.createElement("button");
+    resetBtn.className = "btnReset";
+    resetBtn.textContent = "Reset";
+    resetBtn.addEventListener("click", () => resetRow(r.key));
 
     title.appendChild(left);
-    title.appendChild(right);
+    title.appendChild(resetBtn);
 
     const cells = document.createElement("div");
     cells.className = "cells";
 
-    const allowedFrom = getRowAllowedIndex(r.key);
-
-    r.nums.forEach((num, idx) => {
+    r.nums.forEach((num) => {
       const c = document.createElement("div");
       c.className = `cell ${r.color}` + (num === r.end ? " end" : "");
 
       const marked = !!rowState.marked[num];
       if (marked) c.classList.add("marked");
 
-      // Disable if row locked or left-of-allowed position (enforce left->right),
-      // or end-number lock requirement not met.
       const disabled = !canMark(r.key, num) && !marked;
       if (disabled) c.classList.add("disabled");
+
+      // highlight legal targets for current roll
+      if (legal.has(`${r.key}:${num}`) && !marked) {
+        c.classList.add("legal");
+      }
 
       c.textContent = String(num);
       c.addEventListener("click", () => markNumber(r.key, num));
@@ -322,7 +386,6 @@ function renderScores() {
 }
 
 function renderEndCheck() {
-  // End conditions: 4 penalties OR 2 locked rows.
   const ended = (state.penalties >= 4) || (state.lockedCount >= 2);
   if (!ended) {
     elGameEnd.classList.add("hidden");
