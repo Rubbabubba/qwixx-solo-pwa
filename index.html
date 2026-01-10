@@ -16,6 +16,11 @@
       <h1>Qwixx Solo</h1>
       <div class="sub">Scoresheet + dice roller (offline PWA)</div>
     </div>
+
+    <div class="roll-meta">
+      <span id="rollBadge" class="roll-badge">—</span>
+      <span id="rollTime" class="roll-time"> </span>
+    </div>
   </header>
 
   <main class="wrap">
@@ -28,13 +33,13 @@
         <div class="callout">
           <div class="label">Action 1 (white + white)</div>
           <div id="sumWhite" class="value">—</div>
-          <div class="hint">Legal cells for Action 1 will glow.</div>
+          <div class="hint">Legal cells for Action 1 glow.</div>
         </div>
 
         <div class="callout">
           <div class="label">Action 2 (white + selected color)</div>
           <div id="sumColor" class="value">—</div>
-          <div class="hint">Tap a color die to select it. Legal cells will glow.</div>
+          <div class="hint">Tap a color die to select it. Legal cells glow in that row.</div>
         </div>
       </div>
 
@@ -71,6 +76,9 @@
       <p class="muted">Tip: after the first load, it works offline.</p>
     </section>
   </main>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <!-- One-hand bottom action bar -->
   <nav class="bottom-bar" aria-label="Actions">
