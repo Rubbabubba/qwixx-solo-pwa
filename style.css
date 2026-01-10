@@ -53,7 +53,6 @@ h1 { margin: 0; font-size: 18px; }
 }
 .roll-time { color: var(--muted); font-size: 11px; }
 
-/* Top buttons */
 .top-actions{
   display:flex;
   gap: 8px;
@@ -128,8 +127,53 @@ button.danger { background: var(--danger); }
 .callout .value { font-size: 24px; font-weight: 1100; margin: 6px 0; }
 .callout .hint { color: var(--muted); font-size: 12px; }
 
-.row.small { display:flex; gap: 10px; align-items:center; margin-top: 12px; flex-wrap: wrap; }
+.row.small { display:flex; gap: 14px; align-items:center; margin-top: 12px; flex-wrap: wrap; }
 .chk { color: var(--muted); font-size: 13px; display:flex; gap: 8px; align-items:center; }
+
+.turn-hint { margin-top: 10px; }
+
+.scoreline{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+}
+.scorepill{
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.06);
+  padding: 8px 10px;
+  border-radius: 999px;
+  font-weight: 1000;
+}
+.scorepill strong{ color: #fff; }
+
+.boards-grid{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+.board-header{
+  display:flex;
+  justify-content: space-between;
+  align-items:center;
+  margin-bottom: 10px;
+  gap: 10px;
+}
+.board-title{
+  display:flex;
+  flex-direction:column;
+  gap: 2px;
+}
+.board-title small{ color: var(--muted); }
+.badge2{
+  display:inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.2);
+  font-size: 12px;
+  color: var(--muted);
+}
+.badge2.cpu { color: #fff; font-weight: 1000; background: rgba(255,255,255,.08); }
 
 .sheet-row { margin-top: 10px; padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
 .sheet-row .title { display:flex; justify-content: space-between; align-items:center; margin-bottom: 8px; gap: 8px; }
@@ -169,7 +213,7 @@ button.danger { background: var(--danger); }
 .cell.green { background:#27ae60; }
 .cell.blue { background:#2980b9; }
 
-/* MUCH more obvious legal highlight */
+/* Obvious legal highlight */
 .cell.legal {
   outline: 5px solid rgba(255,255,255,.92);
   box-shadow:
@@ -182,7 +226,6 @@ button.danger { background: var(--danger); }
   50%  { transform: translateY(-1px); box-shadow: 0 0 0 7px rgba(255,255,255,.18), 0 0 22px rgba(255,255,255,.45); }
   100% { transform: translateY(0); box-shadow: 0 0 0 6px rgba(255,255,255,.10), 0 0 10px rgba(255,255,255,.25); }
 }
-/* Corner tag so you can't miss it */
 .cell.legal::before{
   content: "LEGAL";
   position: absolute;
@@ -197,6 +240,7 @@ button.danger { background: var(--danger); }
   border: 1px solid rgba(0,0,0,.25);
 }
 
+/* Illegal tap nudge */
 .cell.illegal { animation: nudge 180ms ease-in-out; }
 @keyframes nudge {
   0% { transform: translateX(0); }
@@ -204,17 +248,6 @@ button.danger { background: var(--danger); }
   60% { transform: translateX(2px); }
   100% { transform: translateX(0); }
 }
-
-.scorebar {
-  margin-top: 14px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-  display:flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  color: var(--muted);
-}
-.scorebar .total { margin-left:auto; color: #fff; }
 
 .game-end {
   margin-top: 12px;
@@ -245,13 +278,12 @@ button.danger { background: var(--danger); }
 }
 .toast.hidden{ display:none; }
 
-/* Phone layout: make top buttons BIG and thumbable */
+/* Phone: BIG top buttons (2x3 grid because we added End Turn) */
 @media (max-width: 520px){
-  .top { align-items: flex-start; }
   .top-right{ width: 100%; align-items:flex-end; }
   .top-actions{
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 10px;
     width: 100%;
   }
