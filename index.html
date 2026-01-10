@@ -25,6 +25,7 @@
 
       <div class="top-actions">
         <button id="btnRoll" class="primary">Roll</button>
+        <button id="btnEndTurn" class="primary">End Turn</button>
         <button id="btnUndo">Undo</button>
         <button id="btnPenalty" class="danger">Penalty</button>
         <button id="btnNew">New</button>
@@ -42,17 +43,22 @@
         <div class="callout">
           <div class="label">Action 1 (white + white)</div>
           <div id="sumWhite" class="value">—</div>
-          <div class="hint">Hints show legal cells for Action 1.</div>
+          <div class="hint">Hints show legal cells for Action 1 (your board).</div>
         </div>
 
         <div class="callout">
           <div class="label">Action 2 (white + selected color)</div>
           <div id="sumColor" class="value">—</div>
-          <div class="hint">Tap a color die to select it. Hints show legal cells.</div>
+          <div class="hint">Tap a color die to select it. Hints show legal cells (your board).</div>
         </div>
       </div>
 
       <div class="row small">
+        <label class="chk">
+          <input type="checkbox" id="chkVsCpu" />
+          Play vs CPU
+        </label>
+
         <label class="chk">
           <input type="checkbox" id="chkHints" />
           Hints (highlight legal moves)
@@ -64,21 +70,18 @@
         </label>
       </div>
 
+      <div id="turnHint" class="turn-hint muted"></div>
       <div id="gameEnd" class="game-end hidden"></div>
     </section>
 
     <section class="panel">
-      <h2>Scoresheet</h2>
-      <div id="sheet"></div>
+      <h2>Scores</h2>
+      <div id="scoreLine" class="scoreline"></div>
+    </section>
 
-      <div class="scorebar">
-        <div>Red: <strong id="scoreRed">0</strong></div>
-        <div>Yellow: <strong id="scoreYellow">0</strong></div>
-        <div>Green: <strong id="scoreGreen">0</strong></div>
-        <div>Blue: <strong id="scoreBlue">0</strong></div>
-        <div>Penalties: <strong id="scorePen">0</strong></div>
-        <div class="total">TOTAL: <strong id="scoreTotal">0</strong></div>
-      </div>
+    <section class="panel">
+      <h2>Boards</h2>
+      <div id="boards"></div>
     </section>
   </main>
 
