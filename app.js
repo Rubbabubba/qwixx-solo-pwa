@@ -1,10 +1,12 @@
-// Qwixx Solo PWA vs CPU (Option A: End Turn triggers CPU)
-// - Play vs CPU toggle
-// - End Turn button runs CPU move after your turn
-// - Two boards rendered (You interactive, CPU read-only)
-// - Hints toggle affects highlights on YOUR board only
+// Qwixx vs CPU (Correct rule flow)
+// Your roll (active): you may use Action 1 (white+white) and/or Action 2 (white+color), or take penalty.
+// CPU roll (active): CPU plays; you may optionally respond with Action 1 (white+white) only.
+// Buttons:
+// - Roll: only when "idle"
+// - End Turn: ends your turn and triggers CPU roll (if vs CPU) OR ends your roll (solo)
+// - Done: finishes the "response to CPU roll" phase and returns to idle
 
-const STORAGE_KEY = "qwixx_solo_cpu_state_v1";
+const STORAGE_KEY = "qwixx_cpu_rules_state_v2";
 
 const SCORE_TABLE = {
   0: 0, 1: 1, 2: 3, 3: 6, 4: 10, 5: 15, 6: 21,
@@ -21,6 +23,7 @@ const ROWS = [
 let state = loadState() ?? newGameState();
 let history = [];
 let lastRoll = null;
+let rollOwner = null; // "YOU" or "CPU"
 
 const elDiceRow = document.getElementById("diceRow");
 const elBoards  = document.getElementById("boards");
@@ -35,11 +38,19 @@ const elRollBadge = document.getElementById("rollBadge");
 const elRollTime = document.getElementById("rollTime");
 const elTurnHint = document.getElementById("turnHint");
 const elScoreLine = document.getElementById("scoreLine");
+const elCpuLogWrap = document.getElementById("cpuLogWrap");
+const elCpuLog = document.getElementById("cpuLog");
 
-document.getElementById("btnRoll").addEventListener("click", rollDice);
-document.getElementById("btnEndTurn").addEventListener("click", endTurn);
-document.getElementById("btnPenalty").addEventListener("click", addPenalty);
+const btnRoll = document.getElementById("btnRoll");
+const btnEndTurn = document.getElementById("btnEndTurn");
+const btnDone = document.getElementById("btnDone");
+const btnPenalty = document.getElementById("btnPenalty");
+
+btnRoll.addEventListener("click", rollDice);
+btnEndTurn.addEventListener("click", endTurn);
+btnDone.addEventListener("click", doneAfterCpu);
 document.getElementById("btnUndo").addEventListener("click", undo);
+btnPenalty.addEventListener("click", addPenalty);
 document.getElementById("btnNew").addEventListener("click", resetGame);
 
 if (elChkHints) {
@@ -57,6 +68,12 @@ if (elChkVsCpu) {
     snapshot();
     state.vsCpu = !!elChkVsCpu.checked;
     ensurePlayers();
+    // reset phase cleanly
+    state.phase = "idle";
+    lastRoll = null;
+    rollOwner = null;
+    state.youChosenColor = null;
+    state.youRespondedToCpu = false;
     saveState();
     renderAll();
   });
@@ -76,17 +93,26 @@ function newGameState() {
   return {
     vsCpu: false,
     hintsEnabled: true,
-
-    // Players[0] = You, Players[1] = CPU (if vsCpu)
     players: [
       { name: "You", isCpu: false, rows: emptyRowsState(), penalties: 0, lockedCount: 0 }
     ],
-
     rollCount: 0,
     lastRolledAt: null,
 
-    // Turn gating
-    phase: "idle" // "idle" | "awaiting_player" | "awaiting_cpu" | "ended"
+    // YOUR chosen color for Action 2 (only relevant on your roll)
+    youChosenColor: null,
+
+    // Phases:
+    // idle -> you_roll -> (endTurn) -> cpu_roll_response -> (done) -> idle
+    phase: "idle",
+
+    // Whether you marked at least one number on YOUR roll (for penalty reminder)
+    youMarkedThisRoll: false,
+
+    // Whether you already responded to CPU roll (Action 1 optional once)
+    youRespondedToCpu: false,
+
+    cpuLog: []
   };
 }
 
@@ -100,7 +126,6 @@ function ensurePlayers() {
       ];
     }
   } else {
-    // solo mode: keep only You
     state.players = [state.players?.[0] ?? { name: "You", isCpu: false, rows: emptyRowsState(), penalties: 0, lockedCount: 0 }];
   }
 }
@@ -109,6 +134,7 @@ function resetGame() {
   if (!confirm("Start a new game? This clears your boards.")) return;
   history = [];
   lastRoll = null;
+  rollOwner = null;
 
   const keepHints = !!state.hintsEnabled;
   const keepVsCpu = !!state.vsCpu;
@@ -125,8 +151,8 @@ function resetGame() {
 /* ------------------ persistence & undo ------------------ */
 
 function snapshot() {
-  history.push(JSON.stringify({ state, lastRoll }));
-  if (history.length > 80) history.shift();
+  history.push(JSON.stringify({ state, lastRoll, rollOwner }));
+  if (history.length > 120) history.shift();
 }
 
 function undo() {
@@ -135,6 +161,7 @@ function undo() {
   const parsed = JSON.parse(snap);
   state = parsed.state;
   lastRoll = parsed.lastRoll;
+  rollOwner = parsed.rollOwner;
   saveState();
   renderAll();
 }
@@ -145,12 +172,12 @@ function loadState() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
 
-    // Backfill flags
     if (typeof parsed.hintsEnabled !== "boolean") parsed.hintsEnabled = true;
     if (typeof parsed.vsCpu !== "boolean") parsed.vsCpu = false;
     if (!parsed.players || !Array.isArray(parsed.players) || parsed.players.length === 0) {
       parsed.players = [{ name: "You", isCpu: false, rows: emptyRowsState(), penalties: 0, lockedCount: 0 }];
     }
+    if (!Array.isArray(parsed.cpuLog)) parsed.cpuLog = [];
 
     state = parsed;
     ensurePlayers();
@@ -208,36 +235,44 @@ function canMark(p, rowKey, num) {
   if (num === r.end) {
     if (countMarks(p, rowKey) < 5) return false;
   }
-
   return true;
 }
 
-/* ------------------ legal targets (per-player) ------------------ */
+/* ------------------ legal targets by context ------------------ */
 
-function getLegalTargetsForPlayer(p, chosenColorKey) {
+// YOUR roll: you may use Action 1 (white sum) and/or Action 2 (white+color on chosen color row)
+function legalTargetsYourRoll(p) {
   const targets = new Set();
   if (!lastRoll) return targets;
 
   const whiteSum = lastRoll.white1 + lastRoll.white2;
-
-  // Action 1: any row, exact whiteSum
   for (const r of ROWS) {
     if (canMark(p, r.key, whiteSum)) targets.add(`${r.key}:${whiteSum}`);
   }
 
-  // Action 2: chosen color row, using ONE white + color
-  const c = chosenColorKey;
-  if (c && lastRoll[c] !== null) {
+  const c = state.youChosenColor;
+  if (c) {
     const a = lastRoll.white1 + lastRoll[c];
     const b = lastRoll.white2 + lastRoll[c];
     if (canMark(p, c, a)) targets.add(`${c}:${a}`);
     if (canMark(p, c, b)) targets.add(`${c}:${b}`);
   }
-
   return targets;
 }
 
-/* ------------------ marking (player vs cpu) ------------------ */
+// CPU roll response: you may ONLY use Action 1 (white sum)
+function legalTargetsCpuResponse(p) {
+  const targets = new Set();
+  if (!lastRoll) return targets;
+
+  const whiteSum = lastRoll.white1 + lastRoll.white2;
+  for (const r of ROWS) {
+    if (canMark(p, r.key, whiteSum)) targets.add(`${r.key}:${whiteSum}`);
+  }
+  return targets;
+}
+
+/* ------------------ marking (YOU) ------------------ */
 
 function explainIllegalTapYou(rowKey, num) {
   const you = state.players[0];
@@ -255,13 +290,23 @@ function explainIllegalTapYou(rowKey, num) {
 
   if (num === r.end && countMarks(you, rowKey) < 5) return `Need 5 marks in ${r.label} before you can lock.`;
 
-  if (canMark(you, rowKey, num)) {
-    if (!lastRoll) return `Roll dice first.`;
-    const legal = getLegalTargetsForPlayer(you, state.youChosenColor);
+  if (!lastRoll) return `Roll dice first.`;
+
+  // Context-specific legality
+  if (state.phase === "you_roll") {
+    const legal = legalTargetsYourRoll(you);
     if (!legal.has(`${rowKey}:${num}`)) {
       const whiteSum = lastRoll.white1 + lastRoll.white2;
-      return `Not legal for this roll. (Action 1 = ${whiteSum})`;
+      return `Not legal for this roll. (White sum = ${whiteSum})`;
     }
+  } else if (state.phase === "cpu_roll_response") {
+    const legal = legalTargetsCpuResponse(you);
+    if (!legal.has(`${rowKey}:${num}`)) {
+      const whiteSum = lastRoll.white1 + lastRoll.white2;
+      return `CPU turn response: you may only use White sum = ${whiteSum}.`;
+    }
+  } else {
+    return "Roll first.";
   }
 
   return `Not legal.`;
@@ -270,24 +315,49 @@ function explainIllegalTapYou(rowKey, num) {
 function markNumberYou(rowKey, num) {
   const you = state.players[0];
 
-  // Must be during your phase
-  if (state.phase !== "awaiting_player") {
-    showToast("Roll first, then play your turn.");
+  if (state.phase !== "you_roll" && state.phase !== "cpu_roll_response") {
+    showToast("Roll first.");
     return false;
   }
 
-  const legalNow = getLegalTargetsForPlayer(you, state.youChosenColor);
-  const isLegalRollTarget = legalNow.has(`${rowKey}:${num}`);
-
-  if (!canMark(you, rowKey, num) || (lastRoll && !isLegalRollTarget)) {
+  // Base rule legality
+  if (!canMark(you, rowKey, num)) {
     showToast(explainIllegalTapYou(rowKey, num));
     return false;
+  }
+
+  // Roll-context legality
+  if (state.phase === "you_roll") {
+    const legal = legalTargetsYourRoll(you);
+    if (!legal.has(`${rowKey}:${num}`)) {
+      showToast(explainIllegalTapYou(rowKey, num));
+      return false;
+    }
+  }
+
+  if (state.phase === "cpu_roll_response") {
+    // allow only one response mark on CPU roll (optional rule for app clarity)
+    if (state.youRespondedToCpu) {
+      showToast("You already responded to this CPU roll.");
+      return false;
+    }
+    const legal = legalTargetsCpuResponse(you);
+    if (!legal.has(`${rowKey}:${num}`)) {
+      showToast(explainIllegalTapYou(rowKey, num));
+      return false;
+    }
   }
 
   snapshot();
 
   you.rows[rowKey].marked[num] = true;
-  elChkDidMark.checked = true;
+
+  if (state.phase === "you_roll") {
+    state.youMarkedThisRoll = true;
+    elChkDidMark.checked = true;
+  } else if (state.phase === "cpu_roll_response") {
+    state.youRespondedToCpu = true;
+  }
 
   // lock if end marked
   const r = ROWS.find(x => x.key === rowKey);
@@ -302,10 +372,21 @@ function markNumberYou(rowKey, num) {
   return true;
 }
 
+/* ------------------ penalty (YOU) ------------------ */
+
 function addPenalty() {
   const you = state.players[0];
+
+  // Penalty button is for YOU only (matches your current UI)
   snapshot();
   you.penalties = Math.min(4, you.penalties + 1);
+
+  // If you're in your roll, record that you "handled" the roll decision
+  if (state.phase === "you_roll") {
+    state.youMarkedThisRoll = true; // so End Turn won't prompt again
+    elChkDidMark.checked = true;
+  }
+
   saveState();
   renderAll();
 }
@@ -313,16 +394,13 @@ function addPenalty() {
 /* ------------------ turn flow ------------------ */
 
 function rollDice() {
-  // Only roll when idle or after cpu finished, not mid-player/cpu step
-  if (state.phase === "awaiting_player" || state.phase === "awaiting_cpu") {
-    showToast("Finish the current turn first (End Turn).");
+  if (state.phase !== "idle") {
+    showToast("Finish the current cycle first.");
     return;
   }
 
   snapshot();
 
-  // Locked dice per PLAYER, but dice are shared; in Qwixx, colored dice still roll even if your row is locked.
-  // We’ll keep existing behavior: if a row is locked for a player, that player just can’t mark there.
   lastRoll = {
     white1: randDie(),
     white2: randDie(),
@@ -331,17 +409,18 @@ function rollDice() {
     green: randDie(),
     blue: randDie()
   };
+  rollOwner = "YOU";
 
   state.rollCount = (state.rollCount || 0) + 1;
   state.lastRolledAt = Date.now();
 
-  // Your chosen color die for Action 2 (you select by tapping a die)
   state.youChosenColor = null;
+  state.youMarkedThisRoll = false;
+  state.youRespondedToCpu = false;
 
   elChkDidMark.checked = false;
 
-  // Start player phase
-  state.phase = "awaiting_player";
+  state.phase = "you_roll";
 
   saveState();
   renderAll();
@@ -349,16 +428,16 @@ function rollDice() {
 }
 
 function endTurn() {
-  if (state.phase !== "awaiting_player") {
-    showToast("Roll first, then End Turn.");
+  if (state.phase !== "you_roll") {
+    showToast("Roll first (your turn), then End Turn.");
     return;
   }
 
   const you = state.players[0];
 
-  // If user didn't mark anything, they should take penalty (we prompt rather than auto)
-  if (!elChkDidMark.checked) {
-    const ok = confirm("You said you did NOT mark a number. Take a penalty?");
+  // Only prompt penalty reminder if they did nothing on their roll and didn't already take a penalty
+  if (!state.youMarkedThisRoll && !elChkDidMark.checked) {
+    const ok = confirm("You marked nothing on your roll. Take a penalty?");
     if (ok) {
       snapshot();
       you.penalties = Math.min(4, you.penalties + 1);
@@ -366,22 +445,50 @@ function endTurn() {
   }
 
   if (!state.vsCpu) {
-    // solo: just go back to idle
+    // Solo: back to idle
     state.phase = "idle";
     saveState();
     renderAll();
     return;
   }
 
-  // CPU phase
+  // CPU roll happens now
   snapshot();
-  state.phase = "awaiting_cpu";
+
+  lastRoll = {
+    white1: randDie(),
+    white2: randDie(),
+    red: randDie(),
+    yellow: randDie(),
+    green: randDie(),
+    blue: randDie()
+  };
+  rollOwner = "CPU";
+
+  state.rollCount = (state.rollCount || 0) + 1;
+  state.lastRolledAt = Date.now();
+
+  // CPU plays immediately on its roll
+  const cpuMoves = cpuPlayTurn();
+
+  // Log it
+  pushCpuLog(cpuMoves);
+
+  // Now YOU may optionally respond with white sum ONLY
+  state.phase = "cpu_roll_response";
+  state.youChosenColor = null; // not available during CPU roll response
+  state.youRespondedToCpu = false;
+
   saveState();
   renderAll();
+  flashDice();
+}
 
-  cpuPlayTurn();
-
-  // back to idle after cpu
+function doneAfterCpu() {
+  if (state.phase !== "cpu_roll_response") {
+    showToast("Done is only after CPU roll.");
+    return;
+  }
   state.phase = "idle";
   saveState();
   renderAll();
@@ -393,71 +500,86 @@ function flashDice() {
   elDiceRow.classList.add("rolled");
 }
 
-/* ------------------ CPU strategy ------------------ */
+/* ------------------ CPU strategy + logging ------------------ */
 
 function cpuPlayTurn() {
   const cpu = state.players[1];
-  if (!cpu) return;
-  if (!lastRoll) return;
+  if (!cpu || !lastRoll) return { marks: [], tookPenalty: false };
 
+  const marks = [];
   let didMark = false;
 
-  // Action 1: try to mark white sum on best row (furthest progress)
+  // Action 1 (white sum): choose best row for progress
   const whiteSum = lastRoll.white1 + lastRoll.white2;
-  const a1Candidates = [];
+  const a1 = [];
   for (const r of ROWS) {
     if (canMark(cpu, r.key, whiteSum)) {
       const idx = r.nums.indexOf(whiteSum);
-      a1Candidates.push({ rowKey: r.key, num: whiteSum, idx, lock: (whiteSum === r.end) });
+      a1.push({ rowKey: r.key, num: whiteSum, idx, lock: (whiteSum === r.end) });
     }
   }
-  if (a1Candidates.length) {
-    a1Candidates.sort((x,y) => (y.lock - x.lock) || (y.idx - x.idx));
-    const pick = a1Candidates[0];
-    applyCpuMark(cpu, pick.rowKey, pick.num);
+  if (a1.length) {
+    a1.sort((x,y) => (y.lock - x.lock) || (y.idx - x.idx));
+    applyCpuMark(cpu, a1[0].rowKey, a1[0].num);
+    marks.push(`${cap(a1[0].rowKey)} ${a1[0].num}`);
     didMark = true;
   }
 
-  // Action 2: choose best color + sum (try lock first, else furthest progress)
-  const colorKeys = ["red","yellow","green","blue"];
-  const a2Candidates = [];
-
-  for (const c of colorKeys) {
-    // two sums (white1+color, white2+color)
+  // Action 2 (white+color): choose best color+sum
+  const a2 = [];
+  for (const c of ["red","yellow","green","blue"]) {
     const colorVal = lastRoll[c];
     const s1 = lastRoll.white1 + colorVal;
     const s2 = lastRoll.white2 + colorVal;
+    const r = ROWS.find(x => x.key === c);
 
     for (const s of [s1, s2]) {
       if (canMark(cpu, c, s)) {
-        const r = ROWS.find(x => x.key === c);
         const idx = r.nums.indexOf(s);
-        a2Candidates.push({ rowKey: c, num: s, idx, lock: (s === r.end) });
+        a2.push({ rowKey: c, num: s, idx, lock: (s === r.end) });
       }
     }
   }
-
-  if (a2Candidates.length) {
-    a2Candidates.sort((x,y) => (y.lock - x.lock) || (y.idx - x.idx));
-    const pick = a2Candidates[0];
-    applyCpuMark(cpu, pick.rowKey, pick.num);
+  if (a2.length) {
+    a2.sort((x,y) => (y.lock - x.lock) || (y.idx - x.idx));
+    applyCpuMark(cpu, a2[0].rowKey, a2[0].num);
+    marks.push(`${cap(a2[0].rowKey)} ${a2[0].num}`);
     didMark = true;
   }
 
-  // If CPU can't mark anything, take a penalty
+  let tookPenalty = false;
   if (!didMark) {
     cpu.penalties = Math.min(4, cpu.penalties + 1);
+    tookPenalty = true;
   }
+
+  return { marks, tookPenalty };
 }
 
 function applyCpuMark(cpu, rowKey, num) {
   cpu.rows[rowKey].marked[num] = true;
-
   const r = ROWS.find(x => x.key === rowKey);
   if (num === r.end && !cpu.rows[rowKey].locked) {
     cpu.rows[rowKey].locked = true;
     cpu.lockedCount += 1;
   }
+}
+
+function pushCpuLog(move) {
+  const whiteSum = lastRoll.white1 + lastRoll.white2;
+  const diceStr = `W:${lastRoll.white1}+${lastRoll.white2}=${whiteSum} | R:${lastRoll.red} Y:${lastRoll.yellow} G:${lastRoll.green} B:${lastRoll.blue}`;
+
+  let msg = `CPU rolled (${diceStr}) → `;
+  if (move.tookPenalty) msg += `took a penalty.`;
+  else if (move.marks.length) msg += `marked: ${move.marks.join(", ")}.`;
+  else msg += `did nothing.`;
+
+  state.cpuLog.unshift({
+    t: Date.now(),
+    text: msg
+  });
+  // keep last 12
+  state.cpuLog = state.cpuLog.slice(0, 12);
 }
 
 /* ------------------ scoring & end ------------------ */
@@ -508,6 +630,8 @@ function renderDice() {
     { k: "blue", v: lastRoll.blue, cls: "blue", label: "B" }
   ];
 
+  const colorSelectionEnabled = (state.phase === "you_roll" && rollOwner === "YOU");
+
   for (const d of dice) {
     const wrap = document.createElement("div");
     wrap.className = "dieWrap";
@@ -516,21 +640,19 @@ function renderDice() {
     die.className = `die ${d.cls}`;
     die.textContent = String(d.v);
 
-    // Your Action 2 die selection
     if (["red","yellow","green","blue"].includes(d.k)) {
-      die.style.cursor = "pointer";
-      die.title = "Tap to select for your Action 2";
-      if (state.youChosenColor === d.k) die.classList.add("selected");
-
-      die.addEventListener("click", () => {
-        if (state.phase !== "awaiting_player") {
-          showToast("Select a color after you roll (during your turn).");
-          return;
-        }
-        state.youChosenColor = (state.youChosenColor === d.k) ? null : d.k;
-        saveState();
-        renderAll();
-      });
+      if (!colorSelectionEnabled) {
+        die.classList.add("disabled");
+      } else {
+        die.style.cursor = "pointer";
+        die.title = "Tap to select for Action 2 (your roll)";
+        if (state.youChosenColor === d.k) die.classList.add("selected");
+        die.addEventListener("click", () => {
+          state.youChosenColor = (state.youChosenColor === d.k) ? null : d.k;
+          saveState();
+          renderAll();
+        });
+      }
     }
 
     const lab = document.createElement("div");
@@ -553,6 +675,11 @@ function renderSums() {
   const whiteSum = lastRoll.white1 + lastRoll.white2;
   elSumWhite.textContent = String(whiteSum);
 
+  if (state.phase !== "you_roll" || rollOwner !== "YOU") {
+    elSumColor.textContent = "Only on your roll";
+    return;
+  }
+
   const c = state.youChosenColor;
   if (!c) {
     elSumColor.textContent = "Tap a color die";
@@ -565,27 +692,41 @@ function renderSums() {
 }
 
 function renderTurnHint() {
-  if (state.phase === "awaiting_player") {
+  if (state.phase === "idle") {
+    elTurnHint.textContent = "Tap Roll to start your turn.";
+  } else if (state.phase === "you_roll") {
     elTurnHint.textContent = state.vsCpu
-      ? "Your turn: mark any legal moves, then press End Turn for CPU."
-      : "Your turn: mark any legal moves, then press End Turn to continue.";
-  } else if (state.phase === "idle") {
-    elTurnHint.textContent = "Tap Roll to start the next turn.";
-  } else if (state.phase === "awaiting_cpu") {
-    elTurnHint.textContent = "CPU is playing…";
+      ? "Your roll: optionally use White sum and/or White+Color. Then End Turn to trigger CPU roll."
+      : "Your roll: optionally use White sum and/or White+Color. End Turn when done.";
+  } else if (state.phase === "cpu_roll_response") {
+    const whiteSum = lastRoll ? (lastRoll.white1 + lastRoll.white2) : "—";
+    elTurnHint.textContent = `CPU rolled. You may optionally mark ONE White-sum (${whiteSum}) on your board, then press Done.`;
   } else {
     elTurnHint.textContent = "";
   }
 }
 
+function renderButtons() {
+  // Roll only when idle
+  btnRoll.disabled = (state.phase !== "idle");
+
+  // End Turn only when in your roll
+  btnEndTurn.disabled = (state.phase !== "you_roll");
+
+  // Done only after CPU roll response
+  btnDone.disabled = (state.phase !== "cpu_roll_response");
+
+  // Penalty allowed anytime (your button) but generally useful during your roll
+  btnPenalty.disabled = false;
+}
+
 function renderScores() {
+  ensurePlayers();
   const you = state.players[0];
   const ys = scoreForPlayer(you);
 
   if (!state.vsCpu) {
-    elScoreLine.innerHTML = `
-      <span class="scorepill">You: <strong>${ys.total}</strong> (Pen ${ys.pen})</span>
-    `;
+    elScoreLine.innerHTML = `<span class="scorepill">You: <strong>${ys.total}</strong> (Pen ${ys.pen})</span>`;
     return;
   }
 
@@ -598,16 +739,32 @@ function renderScores() {
   `;
 }
 
+function renderCpuLog() {
+  if (!state.vsCpu || !state.cpuLog.length) {
+    elCpuLogWrap.classList.add("hidden");
+    elCpuLog.innerHTML = "";
+    return;
+  }
+
+  elCpuLogWrap.classList.remove("hidden");
+  elCpuLog.innerHTML = "";
+
+  for (const item of state.cpuLog) {
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `<strong>${fmtTime(item.t)}</strong> — ${escapeHtml(item.text)}`;
+    elCpuLog.appendChild(div);
+  }
+}
+
 function renderBoards() {
-  elBoards.innerHTML = "";
   ensurePlayers();
+  elBoards.innerHTML = "";
 
   const grid = document.createElement("div");
   grid.className = "boards-grid";
-
   grid.appendChild(renderBoard(0));
   if (state.vsCpu) grid.appendChild(renderBoard(1));
-
   elBoards.appendChild(grid);
 }
 
@@ -630,12 +787,19 @@ function renderBoard(playerIndex) {
 
   header.appendChild(title);
   header.appendChild(badge);
-
   boardWrap.appendChild(header);
 
-  // highlights only for YOU and only if hints enabled
-  const showHints = isYou && !!state.hintsEnabled && state.phase === "awaiting_player";
-  const legal = showHints ? getLegalTargetsForPlayer(p, state.youChosenColor) : new Set();
+  // Hints:
+  // - Only show on YOUR board
+  // - Your roll: show Action 1 + (Action 2 if color selected)
+  // - CPU response: show Action 1 only
+  const showHints = isYou && !!state.hintsEnabled && (state.phase === "you_roll" || state.phase === "cpu_roll_response");
+  let legal = new Set();
+
+  if (showHints && lastRoll) {
+    if (state.phase === "you_roll") legal = legalTargetsYourRoll(p);
+    if (state.phase === "cpu_roll_response") legal = legalTargetsCpuResponse(p);
+  }
 
   for (const r of ROWS) {
     const rowState = p.rows[r.key];
@@ -657,7 +821,6 @@ function renderBoard(playerIndex) {
 
     t.appendChild(left);
 
-    // Row reset only for YOU
     if (isYou) {
       const resetBtn = document.createElement("button");
       resetBtn.className = "btnReset";
@@ -744,8 +907,6 @@ function renderEndCheck() {
     return;
   }
 
-  state.phase = "ended";
-
   const ys = scoreForPlayer(you);
   let msg = `Game Over. You: ${ys.total}.`;
 
@@ -760,13 +921,15 @@ function renderEndCheck() {
   elGameEnd.classList.remove("hidden");
   elGameEnd.textContent = msg;
 
+  // freeze into ended phase
+  state.phase = "ended";
   saveState();
 }
 
 function renderAll() {
   ensurePlayers();
 
-  // sync checkboxes
+  // sync toggles
   if (elChkHints) elChkHints.checked = !!state.hintsEnabled;
   if (elChkVsCpu) elChkVsCpu.checked = !!state.vsCpu;
 
@@ -774,7 +937,32 @@ function renderAll() {
   renderDice();
   renderSums();
   renderTurnHint();
+  renderButtons();
+  renderCpuLog();
   renderScores();
   renderBoards();
   renderEndCheck();
+}
+
+/* ------------------ utils ------------------ */
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function cap(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
