@@ -89,6 +89,7 @@ button {
 button:active { transform: translateY(1px); }
 button.primary { background: var(--btn2); }
 button.danger { background: var(--danger); }
+button[disabled] { opacity: .45; }
 
 .dice-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .dice-row.rolled { animation: diceFlash 520ms ease-out; }
@@ -115,6 +116,7 @@ button.danger { background: var(--danger); }
 .die.green { background: #27ae60; }
 .die.blue { background: #2980b9; }
 .die.selected { outline: 4px solid rgba(255,255,255,.55); }
+.die.disabled { opacity: .45; }
 .dieLabel { font-size: 11px; font-weight: 900; opacity: .9; }
 
 .callouts { display: grid; gap: 10px; margin-top: 12px; }
@@ -146,6 +148,36 @@ button.danger { background: var(--danger); }
   font-weight: 1000;
 }
 .scorepill strong{ color: #fff; }
+
+.cpu-log-wrap{
+  margin-top: 12px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(255,255,255,.04);
+}
+.cpu-log-title{
+  font-weight: 1100;
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: #fff;
+}
+.cpu-log{
+  display:flex;
+  flex-direction:column;
+  gap: 6px;
+  max-height: 180px;
+  overflow:auto;
+}
+.cpu-log .item{
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.25);
+}
+.cpu-log .item strong{ color:#fff; }
 
 .boards-grid{
   display:grid;
@@ -213,7 +245,7 @@ button.danger { background: var(--danger); }
 .cell.green { background:#27ae60; }
 .cell.blue { background:#2980b9; }
 
-/* Obvious legal highlight */
+/* Legal highlight */
 .cell.legal {
   outline: 5px solid rgba(255,255,255,.92);
   box-shadow:
@@ -240,7 +272,6 @@ button.danger { background: var(--danger); }
   border: 1px solid rgba(0,0,0,.25);
 }
 
-/* Illegal tap nudge */
 .cell.illegal { animation: nudge 180ms ease-in-out; }
 @keyframes nudge {
   0% { transform: translateX(0); }
@@ -278,7 +309,7 @@ button.danger { background: var(--danger); }
 }
 .toast.hidden{ display:none; }
 
-/* Phone: BIG top buttons (2x3 grid because we added End Turn) */
+/* Phone: BIG top buttons (we now have 6 buttons) */
 @media (max-width: 520px){
   .top-right{ width: 100%; align-items:flex-end; }
   .top-actions{
