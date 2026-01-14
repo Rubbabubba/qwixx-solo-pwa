@@ -26,6 +26,7 @@
       <div class="top-actions">
         <button id="btnRoll" class="primary">Roll</button>
         <button id="btnEndTurn" class="primary">End Turn</button>
+        <button id="btnDone" class="primary">Done</button>
         <button id="btnUndo">Undo</button>
         <button id="btnPenalty" class="danger">Penalty</button>
         <button id="btnNew">New</button>
@@ -43,13 +44,13 @@
         <div class="callout">
           <div class="label">Action 1 (white + white)</div>
           <div id="sumWhite" class="value">—</div>
-          <div class="hint">Hints show legal cells for Action 1 (your board).</div>
+          <div class="hint">Optional on your roll. Optional response on CPU roll.</div>
         </div>
 
         <div class="callout">
-          <div class="label">Action 2 (white + selected color)</div>
+          <div class="label">Action 2 (one white + selected color)</div>
           <div id="sumColor" class="value">—</div>
-          <div class="hint">Tap a color die to select it. Hints show legal cells (your board).</div>
+          <div class="hint">Only on your roll (active player). Tap a color die to select it.</div>
         </div>
       </div>
 
@@ -66,11 +67,17 @@
 
         <label class="chk">
           <input type="checkbox" id="chkDidMark" />
-          I marked at least one number this roll (if not, take a penalty)
+          I marked at least one number on MY roll (if not, I take a penalty)
         </label>
       </div>
 
       <div id="turnHint" class="turn-hint muted"></div>
+
+      <div id="cpuLogWrap" class="cpu-log-wrap hidden">
+        <div class="cpu-log-title">CPU Log</div>
+        <div id="cpuLog" class="cpu-log"></div>
+      </div>
+
       <div id="gameEnd" class="game-end hidden"></div>
     </section>
 
